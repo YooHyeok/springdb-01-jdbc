@@ -89,3 +89,186 @@ ORM 기술도 내부적으로는 모두 JDBC를 사용한다.
 그래야 해당 기술들을 더 깊이있게 이해할 수 있고, 무엇보다 문제가 발생했을 때 근본적인 문제를 찾아서 해결할 수 있다.  
 **JDBC는 자바 개발자라면 꼭 알아두어야 하는 필수 기본 기술** 이다.
 
+
+# 데이터 베이스 연결
+아래와 같이 테스트 코드를 작성해보도록 한다
+
+```java
+/**
+ * 상수 전용 클래스이므로 객체 생성을 방지하기위해 추상클래스로 선언한다.
+ */
+public abstract class ConnectionConst {
+    public static final String URL = "jdbc:h2:tcp://localhost/~/jdbc";
+    public static final String USERNAME = "sa";
+    public static final String PASSWORD = "";
+
+}
+```
+
+```java
+@Slf4j
+public class DBConnectionUtil {
+    
+    public static Connection getConnection() {
+        try {
+            Connection connection = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+            log.info("get connection={}, class={}", connection, connection.getClass());
+            // get connection=conn0: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class org.h2.jdbc.JdbcConnection
+            return connection;
+        } catch (SQLException e) {
+            throw new IllegalArgumentException(e);
+        } finally {
+
+        }
+    }
+}
+```
+
+```java
+@Slf4j
+public class DBConnectionUtilTest {
+
+    @Test
+    @DisplayName("")
+    void connection() {
+        //given
+        Connection connection = DBConnectionUtil.getConnection();
+
+        //when & then
+        assertThat(connection).isNotNull();
+    }
+}
+```
+
+DriverManager의 getConnection() 메소드 매개변수로 서버에 설치된 각 벤더별 database 서버에 접속하는 JDBC URL, 사용자이름, 비밀번호를 전달하게 되면  
+JDBC 표준 커넥션 인터페이스인 java.sql패키지의 Connection 객체를 반환한다.
+해당 Connection객체는 Database 접속 정보를 통해 현재 라이브러리로 등록된 모든 DataBase `Driver`에 각각 connect를 시도한다.
+이 Driver는 인터페이스로 각 벤더에 맞는 구현체를 갖게 된다.  
+(h2 = org.h2.Driver / MySQL = com.mysql.cj.jdbc.NonRegisteringDriver)
+
+```json
+runtimeOnly 'com.h2database:h2'
+runtimeOnly 'com.mysql:mysql-connector-j'
+```
+
+예를들어 위와같이 h2와 MySQL 라이브러리 의존성을 모두 다운받았다면
+두개의 Driver 구현체 클래스를 루프를통해 접근하여 connect를 시도한다.
+connect 성공여부에 상관없이 con객체를 반환받게되는데 실패하면 해당 객체는 비어있게 된다.
+내부 로직에 의해 con객체가 비어있지 않다면 해당 객체를 반환한다.
+
+위 과정을 거쳐 H2라면 반환받은 Connection 객체는  org.h2.jdbc의 JdbcConnection 구현체가 될것이며,
+만약 MySQL이라면 Connection 객체는  com.mysql.cj.jdbc의 JdbcConnection 구현체가 될것이다
+
+내부 코드는 다음과 같다
+
+```java
+package java.sql;
+public class DriverManager {
+    /* 생략 */
+    @CallerSensitive
+    public static Connection getConnection(String url,
+        String user, String password) throws SQLException {
+        /*생략*/
+        return (getConnection(url, info, Reflection.getCallerClass()));
+    }
+    /* 생략 */
+    private static Connection getConnection(
+            String url, java.util.Properties info, Class<?> caller) throws SQLException {
+        
+        /* 생략 */
+        for (DriverInfo aDriver : registeredDrivers) {
+
+            if (isDriverAllowed(aDriver.driver, callerCL)) {
+                try {
+                    Connection con = aDriver.driver.connect(url, info); // connect() 메소드 는 sql Driver 인터페이스에 정의되어 있다.
+                    if (con != null) {
+                        return (con);
+                    }
+                } catch (SQLException ex) {/*생략*/}
+
+            }
+            /*생략*/
+        }
+    }
+}
+```
+
+내부 static 메소드인 getConnection() 함수에는 아래와 같이 의존성으로 등록된 모든 라이브러리의 Driver에 접근하여 Loop를 돈다.
+```java
+for (DriverInfo aDriver : registeredDrivers) {
+
+    if (isDriverAllowed(aDriver.driver, callerCL)) {
+        try {
+            Connection con = aDriver.driver.connect(url, info); // connect() 메소드 는 sql Driver 인터페이스에 정의되어 있다.
+            if (con != null) {
+                return (con);
+            }
+        } catch (SQLException ex) {/*생략*/}
+
+    }
+    /*생략*/
+}
+```
+바로 위 Loop를 통해 등록된 Driver들에 순차적으로 connect하게 되고  
+반환하는 Connection객체가 비어있지 않을경우 연결에 성공하였으므로 해당 Connection 객체를 반환한다.
+
+여기서 호출된 Driver와 Driver의 connect() 메소드는 아래와 같이 각각 각 밴더의 구현체 클래스와 오버라이딩 된 메소드가 된다.
+
+- ### H2 Driver
+```java
+package org.h2;
+
+public class Driver implements java.sql.Driver, JdbcDriverBackwardsCompat {
+
+    @Override
+    public Connection connect(String url, Properties info) throws SQLException {
+        if (url == null) {
+            throw DbException.getJdbcSQLException(ErrorCode.URL_FORMAT_ERROR_2, null, Constants.URL_FORMAT, null);
+        } else if (url.startsWith(Constants.START_URL)) {
+            return new JdbcConnection(url, info, null, null, false); // 해당 코드에 의해 JdbcConnection객체 반환
+        } else if (url.equals(DEFAULT_URL)) {
+            return DEFAULT_CONNECTION.get();
+        } else {
+            return null;
+        }
+    }
+}
+
+```
+
+```java
+return new JdbcConnection(url, info, null, null, false);
+```
+주석이 달린 부분의 반환코드를 `JdbcConnection`을 반환하게 되는데 해당 객체는  `org.h2.jdbc 패키지의 JdbcConnection` 이다
+
+
+- ### MySQL Driver
+```java
+package com.mysql.cj.jdbc;
+public class NonRegisteringDriver implements java.sql.Driver {
+
+@Override
+    public java.sql.Connection connect(String url, Properties info) throws SQLException {
+        try {
+            /* 생략 */
+            ConnectionUrl conStr = ConnectionUrl.getConnectionUrlInstance(url, info);
+            switch (conStr.getType()) {
+                case SINGLE_CONNECTION:
+                    return com.mysql.cj.jdbc.ConnectionImpl.getInstance(conStr.getMainHost()); // 해당 코드를 통해 JdbcConnection 객체 반환
+                // 이때
+                /*생략*/
+            }
+
+        } catch (UnsupportedConnectionStringException e) {/*생략*/}
+        /* 생략 */
+    }
+}
+```
+
+```java
+return com.mysql.cj.jdbc.ConnectionImpl.getInstance(conStr.getMainHost());
+```
+switch문의 위 코드를 통해 `JdbcConnection`을 반환하게 되는데 getInstance의 반환타입은  `com.mysql.cj.jdbc 패키지의 JdbcConnection` 이다.
+
+H2 Driver 혹은 MySQL Driver 에서의 connect() 과정에서 JdbcConnection 객체들을 각각 반환하게 되는 조건은  
+넘겨받은 DataBase URL 정보가 각 밴더별 JDBC URL 정보와 일치한다면 해당 객체를 반환하게 될것이다.
