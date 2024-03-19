@@ -93,6 +93,7 @@ ORM 기술도 내부적으로는 모두 JDBC를 사용한다.
 # 데이터 베이스 연결
 아래와 같이 테스트 코드를 작성해보도록 한다
 
+* #### [ConnectionConst] class 생성
 ```java
 /**
  * 상수 전용 클래스이므로 객체 생성을 방지하기위해 추상클래스로 선언한다.
@@ -105,6 +106,7 @@ public abstract class ConnectionConst {
 }
 ```
 
+* #### [DBConnectionUtil] class 생성
 ```java
 @Slf4j
 public class DBConnectionUtil {
@@ -123,7 +125,7 @@ public class DBConnectionUtil {
     }
 }
 ```
-
+* #### [DBConnectionUtilTest] test class 생성
 ```java
 @Slf4j
 public class DBConnectionUtilTest {
@@ -272,3 +274,180 @@ switch문의 위 코드를 통해 `JdbcConnection`을 반환하게 되는데 get
 
 H2 Driver 혹은 MySQL Driver 에서의 connect() 과정에서 JdbcConnection 객체들을 각각 반환하게 되는 조건은  
 넘겨받은 DataBase URL 정보가 각 밴더별 JDBC URL 정보와 일치한다면 해당 객체를 반환하게 될것이다.
+
+
+# *JDBC 개발*
+
+## `Statement`와`PreparedStatement`
+Statement는 일반적으로 JDBC에서 SQL구문을 실행하는 역할을 한다.  
+데이터베이스와 연결되어 있는 Connection 객체를 통해 SQL문을 데이터베이스에 전달하여 실행하고, 결과를 리턴받아 주는 객체이다.  
+Statement는 4단계의 동작 방식을 가진다.  
+parse(구문 분석) -> bind(치환) -> execute(실행) -> patch(추출)
+아래는 저장에 대한 간단한 사용법이다.  
+
+### executeUpdate()
+- 저장
+    ```java
+    Connection con = null;
+    Statement stmt = null;
+    String sql = "INSERT INTO member(member_id, money) VALUES(" + memberId + ", "+ money + )";
+    try {
+        con = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+        stmt = con.createStatement(sql);
+        stmt.executeUpdate();
+    } catch(Exception e) {e.printStackTrace();}
+    finallly {
+    /* Closeable 구현*/
+    }    ```  
+
+- 수정
+    ```java
+    Connection con = null;
+    Statement stmt = null;
+    String sql = "UPDATE member SET money = " + money;
+    try {
+    Connection con = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+    Statement stmt = con.createStatement(sql);
+    stmt.executeUpdate();
+    } catch(Exception e) {e.printStackTrace();}
+    finallly {
+    /* Closeable 구현*/
+    }
+    ```  
+### executeQuery()
+- 조회
+    ```java
+    Connection con = null;
+    Statement stmt = null;
+    ResultSet rs = null;
+    String sql = "SELECT * FROM member WHERE member_id = " + memberId;
+    Member member = null;
+    try {
+        con = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+        stmt = con.createStatement(sql);
+        rs = stmt.executeUpdate();
+    while(rs.next()) {
+        member.setMoney(rs.getString())
+    } catch(Exception e) {e.printStackTrace();}
+    finallly {
+    /* Closeable 구현*/
+    }
+    ```
+저장/수정에서는 executeUpdate , 조회에서는 executeQuery를 사용한다.  
+executeUpdate는 적용된 레코드 행의 수를 반환한다.  
+executeQuery 경우 조회된 레코드를 ResultSet으로 반환하며, 해당 레코드는 iterator와 유사한 문법으로 While반복문을 통해  
+커서(행)을 옴기고 행이 존재한다면 데이터를 추출하는 형태로 구현한다.    
+(만약 단건 조회라면 if문을 사용하여 커서를 체크한다.)  
+
+PreparedStatement는 Statement를 상속하고 있는 인터페이스이다.  
+내부적으로 Statement의 4단계 과정 중 첫번째 parse과정의 결과를 캐싱하고, 이후 3가지 단계만 거쳐 SQL문이 실행될 수 있게 한다.  
+이는 동일한 쿼리가 연속적으로 발생할 경우 메모리에 캐싱된 구문을 재사용하기 때문에 구문분석에 대한 작업이 생략되므로,  
+Statement보다 효율적으로 작동하게 된다.
+
+또한 PreparedStatement는 `SQL Injection`을 예방할 수 있다.   
+예를들어 `String sql = "insert into member(member_id, money) values ("+ memberId +", "+ money +");`  
+위와 같은 쿼리가 구성되어 있고 memberId에 대한 파라미터가 `String memberId = "select * from ...";`  
+와 같은 조회 형태의 SQL 문자열이 전달된다고 할때, 문자열 결합에서는 해당 문자열이 SQL로 치환된다.  
+이 경우 자칫 잘못하면 프로그램 로직이 들어올 수도 있다..  
+하지만 파라미터 바인딩시에는 해당 문자열이 단순히 데이터로 취급되어버리기 때문에 안전해진다. 
+
+- ## 저장
+    ```java
+    @Slf4j
+    public class MemberRepositoryV0 {
+        /* H2 DB 정보 */
+        public static final String URL = "jdbc:h2:tcp://localhost/~/jdbc";
+        public static final String USERNAME = "sa";
+        public static final String PASSWORD = "";
+        
+        public Member save(Member member) throws SQLException {
+            
+            try { // prepareStatement() 메소드에서 java.sql.SQLException리는 CheckedException을 Throw한다.
+                Connection con = DriverManager.getConnection(URL, USERNAME, PASSWORD); // 커넥션 연결 후 커넥션 객체 반환
+                pstmt = con.prepareStatement(sql);
+                pstmt.setString(1, member.getMemberId()); // prepareStatement()에 인수로 전달한 SQL문 문자열에 파라미터 바인딩한다.
+                pstmt.setInt(2, member.getMoney()); // 첫번째 인수는 물음표의 순서를, 두번째 인수는 바안딩할 값으로 지정한다.
+                int count = pstmt.executeUpdate();// 실제 쿼리 실행 후 영향받은 row 수 반환 - Statement를 통해 준비된 SQL을 커넥션을 통해 실제 데이터베이스에 전달
+                return member;
+            } catch (SQLException e) {
+                log.error("db error", e);
+                throw e; // save() 메소드 호출부로 예외를 던진다.
+            } finally {
+                if (rs != null) {
+                    try {
+                        rs.close();
+                    } catch (SQLException e) {
+                        log.error("error", e);
+                    }
+                }
+                if (stmt != null) {
+                    try {
+                        stmt.close();
+                    } catch (SQLException e) {
+                        log.error("error", e);
+                    }
+                }
+                if (con != null) {
+                    try {
+                        con.close();
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+        }
+    }
+    
+    ```
+    
+    ParameterBinding
+
+    ```java
+    Connection con = null;
+    PreparedStatement pstmt = null;
+    try {
+        con=DriverManager.getConnection(URL,USERNAME,PASSWORD); // 커넥션 연결 후 커넥션 객체 반환
+        pstmt=con.prepareStatement(sql);
+        pstmt.setString(1,member.getMemberId()); // prepareStatement()에 인수로 전달한 SQL문 문자열에 파라미터 바인딩한다.
+        pstmt.setInt(2,member.getMoney()); // 첫번째 인수는 물음표의 순서를, 두번째 인수는 바안딩할 값으로 지정한다.
+        int count=pstmt.executeUpdate();
+    }
+    ```
+     
+    먼저 JDBC 커넥션 객체를 얻고, 해당 객체의 prepareStatement() 함수를 통해 sql을 인자로 넘긴다.  
+    PrepareStatement 객체의 set메소드를 통해 SQL에 파라미터값을 받을 위치에 지정한 ? 문자에 파라미터 바인딩이 가능하다.  
+    setString과 setInt 등을 사용하였는데, 첫번째 인자로는 바인딩 될 ?의 순서를 지정하고, 두번째 인자로는 바인딩 될 값을 지정한다.  
+    바인딩이 완료되었다면 PrepareStatement객체의 executeUpdate() 메소드를 통해 실제 쿼리를 실행한다.  
+    이때 해당 메소드로부터 반환받는 int 값은 실제 쿼리 실행 후 영향받은 row의 갯수이다.
+    조회쿼리는 Statement와 사용법이 거의 동일하다.
+    
+    ```java
+        finally {
+            if (rs != null) {
+                try {
+                    rs.close();
+                } catch (SQLException e) {
+                    log.error("error", e);
+                }
+            }
+            if (stmt != null) {
+                try {
+                    stmt.close();
+                } catch (SQLException e) {
+                    log.error("error", e);
+                }
+            }
+            if (con != null) {
+                try {
+                    con.close();
+                } catch (SQLException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+    ```
+    열린 Closable 객체들은 fnially구문에서 닫아준다.  
+    간혹 책에서 try 구문 안에 JDBC 로직 종료 후 바로 CLoasable에 대한 작업을 하는데, 이는 문제 발생을 야기한다.  
+    만약 JDBC 구문이 오류가 나서 catch구문으로 빠지게되면, Closable에 대한 로직은 작동되지 않기 때문이다.  
+    또한, finally 안에서도 각 Closable한 객체에 대해 각각 예외처리를 따로 해 줘야한다.  
+    중간에 예외가 발생한다면, 해당 Excepion을 처리하고 그 다음에 오는 작업이 수행되지 않기 때문이다.  
