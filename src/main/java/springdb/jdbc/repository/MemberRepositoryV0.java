@@ -4,10 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import springdb.jdbc.connection.DBConnectionUtil;
 import springdb.jdbc.domain.Member;
 
-import java.io.*;
 import java.sql.*;
-import java.time.Duration;
-import java.util.Arrays;
 import java.util.NoSuchElementException;
 
 /**
@@ -52,6 +49,8 @@ public class MemberRepositoryV0 {
             close(con, pstmt, null);
 
         }
+
+
     }
 
     public Member findById(String memberId) throws SQLException {
@@ -80,6 +79,44 @@ public class MemberRepositoryV0 {
             close(con, pstmt, rs);
         }
 
+    }
+
+    public void update(String memberId, int money) throws SQLException {
+        String sql = "update member set money=? where member_id=?";
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setInt(1, money);
+            pstmt.setString(2, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize={}", resultSize);
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, null);
+        }
+
+    }
+
+    public void delete(String memberId) throws SQLException {
+        String sql = "delete member where member_id = ? ";
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            int resultSize = pstmt.executeUpdate();
+            log.info("resultSize={}", resultSize);
+        } catch (SQLException e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, null);
+        }
     }
 
 
