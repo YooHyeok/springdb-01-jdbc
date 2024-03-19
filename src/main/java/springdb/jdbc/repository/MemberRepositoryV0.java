@@ -8,6 +8,7 @@ import java.io.*;
 import java.sql.*;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.NoSuchElementException;
 
 /**
  * JDBC를 통해 회원 객체를 데이터베이스에 저장하는 Repository 클래스
@@ -51,8 +52,36 @@ public class MemberRepositoryV0 {
             close(con, pstmt, null);
 
         }
+    }
+
+    public Member findById(String memberId) throws SQLException {
+        String sql = "select * from member where member_id = ?";
+        Connection con = null;
+        PreparedStatement pstmt = null;
+        ResultSet rs = null;
+        Member member = null;
+        try {
+            con = getConnection();
+            pstmt = con.prepareStatement(sql);
+            pstmt.setString(1, memberId);
+            rs = pstmt.executeQuery();
+            if (rs.next()) { // ResultSet 커서는 처음에는 아무것도 가리키지 않으므로 if 혹은 while로 조회시 무조건 한번이상 next()로 커서를 넘긴다.
+                member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            } else {
+                throw new NoSuchElementException("member not found memberId = " + memberId);
+            }
+        } catch (Exception e) {
+            log.error("db error", e);
+            throw e;
+        } finally {
+            close(con, pstmt, rs);
+        }
 
     }
+
 
     /**
      * 리소스를 close() 한다.
