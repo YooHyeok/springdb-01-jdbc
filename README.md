@@ -336,7 +336,8 @@ parse(구문 분석) -> bind(치환) -> execute(실행) -> patch(추출)
 저장/수정에서는 executeUpdate , 조회에서는 executeQuery를 사용한다.  
 executeUpdate는 적용된 레코드 행의 수를 반환한다.  
 executeQuery 경우 조회된 레코드를 ResultSet으로 반환하며, 해당 레코드는 iterator와 유사한 문법으로 While반복문을 통해  
-커서(행)을 옴기고 행이 존재한다면 데이터를 추출하는 형태로 구현한다.    
+커서(행)을 옴기고 행이 존재한다면 데이터를 추출하는 형태로 구현한다.  
+최초의 ResultSet의 커서는 데이터를 가리키고 있지 않기 때문에 조건절을 통해 최초로 1회이상 호출해야 데이터조회가 가능하다.  
 (만약 단건 조회라면 if문을 사용하여 커서를 체크한다.)  
 
 PreparedStatement는 Statement를 상속하고 있는 인터페이스이다.  
@@ -450,4 +451,233 @@ Statement보다 효율적으로 작동하게 된다.
     간혹 책에서 try 구문 안에 JDBC 로직 종료 후 바로 CLoasable에 대한 작업을 하는데, 이는 문제 발생을 야기한다.  
     만약 JDBC 구문이 오류가 나서 catch구문으로 빠지게되면, Closable에 대한 로직은 작동되지 않기 때문이다.  
     또한, finally 안에서도 각 Closable한 객체에 대해 각각 예외처리를 따로 해 줘야한다.  
-    중간에 예외가 발생한다면, 해당 Excepion을 처리하고 그 다음에 오는 작업이 수행되지 않기 때문이다.  
+    중간에 예외가 발생한다면, 해당 Excepion을 처리하고 그 다음에 오는 작업이 수행되지 않기 때문이다.
+
+# Connection Pool
+JDBC를 사용하기 위해 DriverManager를 사용하게 되면 데이터베이스 커넥션을 항상 매번 획득하게 된다.  
+데이터베이스 커넥션을 획득할 때는 아래와 같은 복잡한 과정을 거친다.
+1. 애플리케이션 로직은 DB 드라이버를 통해 커넥션을 조회한다. (`getConnection()`)
+2. DB 드라이버는 DB와 `TCP/IP` 커넥션을 연결한다.
+   (이 과정에서 3way handshake 같은 `TCP/IP` 연결을 위한 네트워크 동작이 발생한다.)
+3. `TCP/IP` 커넥션이 연결 후 DB 드라이버는 ID,PW 같은 기타 부가정보를 DB에 전달한다.
+4. DB는 ID, PW를 통해 내부 인증을 완료하고, 내부에 DB 세션을 생성한다.
+   (DB Session: 인증된 사용자라는 것과, 내부에서 특정 작업을 하기 위해 생성됨)
+5. DB는 커넥션 생성이 완료되었다는 응답을 반환한다.
+6. DB 드라이버는 커넥션 객체를 생성하여 클라이언트에 반환한다.
+
+위와같이 커넥션을 새로 생성하는 것은 과정도 복잡하고, 시간도 많이 소모되는 일이다.  
+DB는 물론이고 애플리케이션 서버 입장에서도 `TCP/IP` 커넥션을 새로 생성하기 위한 리소스를 매번 사용해야 한다.  
+진짜 문제는 고객이 애플리케이션을 사용할 때, SQL을 실행하는 시간 뿐만 아니라 커넥션을 새로 만드는 시간이 추가되기 때문에 결과적으로  
+응답 속도에 영향을 준다.  
+이는 사용자에게 좋지 않은 경험을 줄 수 있다.  
+이런 문제를 한번에 해결하는 아이디어가 바로 커넥션을 미리 생성해두고 사용하는 커넥션 풀이라는 방법이다.  
+커넥션 풀은 이름 그대로 커녁션을 관리하는 풀(수영장 풀을 상상하면 된다.)이다.  
+애플리케이션을 시작하는 시점에 커넥션 풀은 필요한 만큼 커넥션을 미리 확보한 뒤 풀에 보관한다.  
+얼마나 보관할지는 서비스의 특징과 서버 스펙에 따라 다르며, 기본값은 10개이다.  
+커넥션 풀에 들어있는 커넥션은 `TCP/IP`로 DB와 커넥션이 연결되어 있는 상태이기 때문에 언제든지 즉시 SQL을 DB에 전달할 수 있다.  
+
+- 애플리케이션 로직에서 DB 드라이버를 통해 새로운 커넥션을 획득하는 것이 아님.
+- 커넥션 풀을 통해 이미 생성되어 있는 커넥션을 객체 참조로 가져다 쓰기만 하면 됨.
+- 커넥션 풀에 커넥션을 요청하면 커넥션 풀은 자신이 가지고 있는 커넥션 중에 하나를 반환함.
+
+애플리케이션 로직은 커넥션 풀에서 받은 커넥션을 사용해서 SQL을 데이터베이스에 전달하고 그 결과를 받아 처리한다.  
+커넥션을 모두 사용하고 나면 이제는 커넥션을 종료하는 것이 아니라, 다음 작업에서 재사용 할 수 있도록 해당 커넥션을 그대로 커넥션 풀에 반환하면 된다.  
+이때 주의할 점은 커넥션 종료가 아닌 커넥션이 살아있는 상태로 커넥션 풀에 반환해야 한다는 것이다.  
+
+[결론]
+- 적절한 커넥션 풀 숫자는 서비스의 특징과 애플리케이션 서버 스펙, DB 서버 스펙에 따라 다르므로 성능테스트를 통해 정해야 함.
+- 커넥션 풀은 서버당 최대 커넥션 수 제한이 가능. 따라서 DB에 무한정 연결이 생성되는 것을 막아 DB를 보호하는 효과도 있음.
+- 커넥션 풀을 통해 얻는 이점이 매우 크기 때문에 실무에서는 항상 기본으로 사용한다.
+- 커넥션 풀은 개념적으로 단순해서 직접 구현할 수도 있지만, 사용도 편리하고 성능도 뛰어난 오픈소스 커넥션 풀이 많으므로 오픈소스를 사용.
+- 대표적인 커넥션 풀 오픈소스 `commons-dbcp2` `tomcat-jdbc pool` `HikariCP` 등이 있다. (춘추전국시대)
+- 성능과 사용의 편리함 측면에서는 최근 `HikariCP`를 주로 사용하며, 스프링부트 2.0부터는 기본 커넥션 풀로 제공된다.  
+  성능, 사용의 편리함, 안정성 측면에서 이미 검증되었기 때문에 커넥션풀을 사용할 때는 고민없이 `HikariCP`를 사용하면 된다.  
+  (실무에서도 레거시 프로젝트가 아닌 이상 대부분 `HikariCP`를 사용함)
+
+# Datasource
+커넥션 풀을 사용하게 되면 의존 관계가 DriverManager 에서 HikariCP로 변경되기 때문에 커넥션을 획득하는 애플리케이션 코드도 함께 변경해야한다.    
+이런 문제를 해결하기 위해 결국 커넥션을 획득 하는 방법을 추상화 하게 된다.  
+자바에서는 이런 문제를 해결하기 위해 `javax.sql.DataSource`라는 인터페이스를 제공한다.  
+`DataSource`가 바로 `커넥션을 획득하는 방법을 추상화` 하는 인터페이스 이다.  
+핵심 기능은 커넥션 조회 하나이다.(다른 기능도 있으나 중요하지 않음)  
+`DBCP2, HikariCP, DriverManager TomcatJDBC` 등 각 구현체들마다 커넥션을 획득하는 방법을 추상화하여 표준화한것이다. 
+
+대부분의 커넥션 풀은 DataSource 인터페이스를 미리 구현해 두었으므로,개발자는 `DBCP, HikariCP` 등의 코드를 직접 의존하는 것이 아니라  
+`DataSource` 인터페이스에만 의존하도록 애플리케이션 로직을 작성하면 된다.  
+커넥션 풀 구현 기술을 변경하고 싶으면 해당 구현체로 갈아끼우기만 하면 된다.  
+
+`DriverManager`는 `DataSource` 인터페이스를 사용하지 않기 때문에 `DriverManager`는 직접 사용해야 한다.  
+따라서 `DriverManager`를 사용하다가 `DataSource` 기반의 커넥션 풀을 사용하도록 변경하면 관련 코드를 다 고쳐야 한다.
+이런 문제를 해결하기 위해 스프링은 `DriverManager`도 `DataSource`를 통해서 사용할 수 있도록 `DriverManagerDataSource`라는  
+`DataSource`를 구현한 클래스를 제공한다.  
+
+자바는 `DataSource`를 통해 커넥션을 획득하는 방법을 추상화 했으므로, 애플리케이션 로직은 `DataSource` 인터페이스에만 의존하면 된다.  
+덕분에 `DirverManagerDataSource`를 통해 `DriverManager`를 사용하다가 커넥션 풀을 사용하도록 코드를 변경해도 애플리케이션 로직은 변경하지 않아도 된다.
+
+ - ## DataSource 테스트 
+   - DriverManager
+    ```java
+    @Slf4j
+    class ConnectionTest {
+        @Test
+        @DisplayName("JDBC 커넥션 테스트 - DriverManager")
+        void driverManager() throws SQLException {
+            Connection con1 = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+            Connection con2 = DriverManager.getConnection(URL, USERNAME, PASSWORD);
+            log.info("connection={}, class={}", con1, con1.getClass()); // conn0
+            log.info("connection={}, class={}", con2, con2.getClass()); // conn1
+        }
+    }
+    ```
+    - DriverManagerDataSource
+    ```java
+    @Slf4j
+    class ConnectionTest {
+        @Test
+        @DisplayName("JDBC 커넥션 테스트 - DriverManagerDataSource")
+        void diverManagerDataSourcethrows() throws SQLException {
+            DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+            useDataSource(dataSource);
+        }
+    
+        private void useDataSource(DataSource dataSource) throws SQLException {
+            Connection con1 = dataSource.getConnection();
+            Connection con2 = dataSource.getConnection();
+            log.info("connection={}, class={}", con1, con1.getClass()); // conn0
+            log.info("connection={}, class={}", con2, con2.getClass()); // conn1
+        }
+    }
+    ```
+    DriverManager는 커넥션을 획득할 때 마다 `URL, USERNAME, PASSWORD` 같은 파라미터를 계속 전달해야 한다.  
+    반면 DataSource를 사용하는 방식은 처음 객체를 생성할 때만 필요한 파라미터를 남겨두고, 커넥션을 획득할 때는 단순히 dataSource.getConnection()만 호출하면 된다.  
+    위와같은 차이는 `설정과 사용의 분리`를 한것이다.
+
+### `설정과 사용의 분리`
+- 설정 : `DataSource`를 만들고 필요한 속성들을 사용해서 `URL, USERNAME, PASSWORD`같은 부분을 입력하는 것을 말한다.  
+  이렇게 설정과 관련된 속성들은 한 곳에 있는 것이 향후 변경에 더 유연하게 대처할 수 있다.
+- 사용 : 설정은 신경쓰지 않고, `DataSource`의 `getConnection()` 만 호출해서 사용하면 된다.
+
+이 부분이 작아보이지만 큰 차이를 만들어 낸다.
+필요한 데이터를 `DataSource`가 만들어지는 시점에 미리 다 넣어두게 되면, `DataSource`를 사용하는 곳에서는  
+`dataSource.getConnection()`만 호출하면 되므로, `URL, USERNAME, PASSWORD` 같은 속성들에 의존하지 않아도 된다.  
+그냥 `DataSource`만 주입받아서 `getConnection()`만 호출하면 된다.  
+쉽게 말해 Repository는 `DataSource`만 의존하고 `URL, USERNAME, PASSWORD` 같은 속성을 몰라도 된다.  
+애플리케이션을 개발해보면 보통 설정은 한 곳에서 하지만, 사용은 수 많은 곳에서 하게 된다.  
+이 덕분에 객체 설정 부분과, 사용 부분을 좀 더 명확하게 분리할 수 있다.  
+
+
+ - ## ConnectionPoot 테스트
+    ```java
+    @Slf4j
+    class ConnectionTest {
+        @Test
+        @DisplayName("Connection Pooling 테스트")
+        void dataSourceConnectionPool() throws SQLException, InterruptedException {
+            HikariDataSource dataSource = new HikariDataSource();
+            dataSource.setJdbcUrl(URL);
+            dataSource.setUsername(USERNAME);
+            dataSource.setPassword(PASSWORD);
+            dataSource.setMaximumPoolSize(10);
+            dataSource.setPoolName("MyPool");
+            
+            useDataSource(dataSource);
+            
+            Thread.sleep(1000); //대기시간 1초
+        }
+    
+        private void useDataSource(DataSource dataSource) throws SQLException {
+            Connection con1 = dataSource.getConnection();
+            Connection con2 = dataSource.getConnection();
+            log.info("connection={}, class={}", con1, con1.getClass()); // conn0
+            log.info("connection={}, class={}", con2, con2.getClass()); // conn1
+        }
+    }
+    ```
+   일반적으로 커넥션 풀에서 커넥션을 생성하는 작업은 애플리케이션 실행 속도에 영향을 주지 않기 위해 별도의 스레드에서 작동한다.
+   별도의 스레드에서 동작하기 때문에 테스트가 먼저 종료되어 버리므로 Pool에 추가되는 과정이 제대로 진행되지 않는다. 
+   따라서 테스트 실행 후 대기시간을 주어야 로그 확인이 가능하다.
+    
+```test/plain
+15:50:41.715 [main] DEBUG com.zaxxer.hikari.HikariConfig -- jdbcUrl.........................jdbc:h2:tcp://localhost/~/jdbc
+15:50:41.717 [main] DEBUG com.zaxxer.hikari.HikariConfig -- username........................"sa"
+15:50:41.716 [main] DEBUG com.zaxxer.hikari.HikariConfig -- password........................<masked>
+15:50:41.715 [main] DEBUG com.zaxxer.hikari.HikariConfig -- maximumPoolSize.................10
+15:50:41.716 [main] DEBUG com.zaxxer.hikari.HikariConfig -- poolName........................"MyPool"
+```
+설정한 값들이 여러 로그들과 함께 사용할 수 있게 된다.
+
+### MyPool Connection Adder ▼
+```text/plain
+16:15:34.378 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.394 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn2: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.410 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn3: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.425 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn4: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.441 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn5: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.455 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn6: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.471 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn7: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.486 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn8: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+16:15:34.503 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn9: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+```
+
+로그를 통해 별도의 스레드를 사용해서 커넥션 풀을 채우고 있는것을 확인할 수 있다.  
+이 쓰레드는 커넥션 풀에 커넥션을 최대 풀 수('10') 까지 채운다.  
+커넥션 풀에 커넥션을 채우는것은 상대적으로 오래걸리는 일이다.  
+애플리케이션을 실행할 때 커넥션 풀을 채울 때 까지 마냥 대기하고 있다면 애플리케이션 실행 시간이 늦어진다.  
+따라서 별도의 스레드를 사용해 커넥션 풀을 채워야 애플리케이션 실행 시간에 영향을 주지 않게 된다.
+
+### 커넥션 풀에서 커넥션 획득 ▼
+
+```test/plain
+16:15:34.378 [main] INFO  s.jdbc.connection.ConnectionTest -- connection=HikariProxyConnection@1151704483 wrapping conn0: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
+16:15:34.384 [main] INFO  s.jdbc.connection.ConnectionTest -- connection=HikariProxyConnection@28094269 wrapping conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
+```
+HikariProxyConnection은 Hikari가 Connection Pool에서 관리하는 Connection이다.  
+HikariProxyConnection안에 실제적으로 wrapping된 JDBC Connection이 들어있다.  
+
+전체 커넥션 10개, active(사용) 2개, idle(대기) 8개
+```text/plain
+16:15:34.482 [MyPool housekeeper] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Pool stats (total=8, active=2, idle=6, waiting=0)
+```
+
+그렇다면 Connection Pool에 커넥션이 10개까지 차기 전에 Connection을 획득하면 어떻게 될까?
+이때는 내부적으로 대기해준 뒤 커넥션이 채워지게되면 그때 반환한다.
+(아무것도 없을때 1개를 요청한다면 1개가 찼을때 바로 반환해줌)
+
+또한 설정한 최대 커넥션 수(10개)를 초과하게 된다면, ConnectionPool에 Connection이 확보될 때 까지 대기하고, 
+HicariCP의 기본 설정에 의해 30초 후에 커넥션이 끊긴다.
+
+```java
+        Connection con1 = dataSource.getConnection();
+        Connection con2 = dataSource.getConnection();
+        Connection con3 = dataSource.getConnection();
+        Connection con4 = dataSource.getConnection();
+        Connection con5 = dataSource.getConnection();
+        Connection con6 = dataSource.getConnection();
+        Connection con7 = dataSource.getConnection();
+        Connection con8 = dataSource.getConnection();
+        Connection con9 = dataSource.getConnection();
+        Connection con10 = dataSource.getConnection();
+        Connection con11 = dataSource.getConnection(); // 커넥션 초과
+```
+
+```text/plain
+java.sql.SQLTransientConnectionException: MyPool - Connection is not available, request timed out after 30009ms.
+
+	at com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:696)
+	at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:181)
+	at com.zaxxer.hikari.pool.HikariPool.getConnection(HikariPool.java:146)
+	at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:128)
+	at springdb.jdbc.connection.ConnectionTest.useDataSource(ConnectionTest.java:66)
+	at springdb.jdbc.connection.ConnectionTest.dataSourceConnectionPool(ConnectionTest.java:45)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:568)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1511)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1511)
+```
+테스트 이기 때문에 pool에 반환되는것이 없으므로 전체 연결이 끈기게 된다.
+(대기 시간또한 설정법에 의해 설정이 가능하다.)
+
+
+
+
+
+
