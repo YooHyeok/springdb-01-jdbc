@@ -598,25 +598,25 @@ DB는 물론이고 애플리케이션 서버 입장에서도 `TCP/IP` 커넥션�
    따라서 테스트 실행 후 대기시간을 주어야 로그 확인이 가능하다.
     
 ```test/plain
-15:50:41.715 [main] DEBUG com.zaxxer.hikari.HikariConfig -- jdbcUrl.........................jdbc:h2:tcp://localhost/~/jdbc
-15:50:41.717 [main] DEBUG com.zaxxer.hikari.HikariConfig -- username........................"sa"
-15:50:41.716 [main] DEBUG com.zaxxer.hikari.HikariConfig -- password........................<masked>
-15:50:41.715 [main] DEBUG com.zaxxer.hikari.HikariConfig -- maximumPoolSize.................10
-15:50:41.716 [main] DEBUG com.zaxxer.hikari.HikariConfig -- poolName........................"MyPool"
+jdbcUrl.........................jdbc:h2:tcp://localhost/~/jdbc
+username........................"sa"
+password........................<masked>
+maximumPoolSize.................10
+poolName........................"MyPool"
 ```
 설정한 값들이 여러 로그들과 함께 사용할 수 있게 된다.
 
 ### MyPool Connection Adder ▼
 ```text/plain
-16:15:34.378 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.394 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn2: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.410 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn3: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.425 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn4: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.441 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn5: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.455 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn6: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.471 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn7: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.486 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn8: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
-16:15:34.503 [MyPool connection adder] DEBUG com.zaxxer.hikari.pool.HikariPool -- MyPool - Added connection conn9: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn2: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn3: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn4: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn5: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn6: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn7: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn8: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
+MyPool - Added connection conn9: url=jdbc:h2:tcp://localhost/~/jdbc user=SA
 ```
 
 로그를 통해 별도의 스레드를 사용해서 커넥션 풀을 채우고 있는것을 확인할 수 있다.  
@@ -628,8 +628,8 @@ DB는 물론이고 애플리케이션 서버 입장에서도 `TCP/IP` 커넥션�
 ### 커넥션 풀에서 커넥션 획득 ▼
 
 ```test/plain
-16:15:34.378 [main] INFO  s.jdbc.connection.ConnectionTest -- connection=HikariProxyConnection@1151704483 wrapping conn0: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
-16:15:34.384 [main] INFO  s.jdbc.connection.ConnectionTest -- connection=HikariProxyConnection@28094269 wrapping conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
+connection=HikariProxyConnection@1151704483 wrapping conn0: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
+connection=HikariProxyConnection@28094269 wrapping conn1: url=jdbc:h2:tcp://localhost/~/jdbc user=SA, class=class com.zaxxer.hikari.pool.HikariProxyConnection
 ```
 HikariProxyConnection은 Hikari가 Connection Pool에서 관리하는 Connection이다.  
 HikariProxyConnection안에 실제적으로 wrapping된 JDBC Connection이 들어있다.  
@@ -677,7 +677,51 @@ java.sql.SQLTransientConnectionException: MyPool - Connection is not available, 
 (대기 시간또한 설정법에 의해 설정이 가능하다.)
 
 
+# 실제 Connection Pool 테스트
+```java
+@Slf4j
+class MemberRepositoryV1Test {
 
+    MemberRepositoryV1 memberRepository;
+
+    @BeforeEach
+    void beforeEach() {
+        // 기본 DriverManager - 항상 새로운 커넥션 획득
+//        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+
+        //커넥션 풀링 적용 (HikariCP)
+        HikariDataSource dataSource = new HikariDataSource();
+        dataSource.setJdbcUrl(URL);
+        dataSource.setUsername(USERNAME);
+        dataSource.setPoolName(PASSWORD);
+        memberRepository = new MemberRepositoryV1(dataSource); // MemberRepositoryV1 생성자에 DataSource 주입
+    }
+    
+}
+```
+
+```text/plain
+getConnection=HikariProxyConnection@1078705341 wrapping conn0: (~ JDBC Connection 정보 생략)
+getConnection=HikariProxyConnection@554868511 wrapping conn0:  (~ JDBC Connection 정보 생략)
+getConnection=HikariProxyConnection@586358252 wrapping conn0:  (~ JDBC Connection 정보 생략)
+getConnection=HikariProxyConnection@885002305 wrapping conn0:  (~ JDBC Connection 정보 생략)
+getConnection=HikariProxyConnection@1066615508 wrapping conn0:  (~ JDBC Connection 정보 생략)
+getConnection=HikariProxyConnection@1262548561 wrapping conn0:  (~ JDBC Connection 정보 생략)
+```
+connection은 모두 conn0 객체가 주입된다.
+즉, 커넥션 풀 사용시 conn0이 재사용 된 것을 확인할 수 있으며, 이는 테스트 로직내부에서 순서대로 실행되기 때문에 동일한 커넥션을 사용한뒤 반환한 객체를 다시 돌려주는것을 반복한 것이다.  
+따라서 conn0만 사용된 것이다.
+예를들어 다른 스레드를 통해 다른 기능이 호출되어 JDBC Connection객체를 사용하게 되면 커넥션 풀에 존재하는 다른 Connection객체 (conn1)을 반환받아,  
+해당 기능(트랜잭션단위)이 종료될때 까지가 하나의 스레드내에서 동작되므로 웹 어플리케이션에 동시에 여러 요청이 들어오면 여러 스레드에서 커넥션 풀의 커넥션을 다양하게 꺼내 쓰는 상황을 확인할 수 있다.  
+
+이때 직접 꺼내 사용하기 전 Pool에 존재하는 Connection들은 Proxy 객체로 존재하고 있다.  
+히카리 객체가 생성될 때 Proxy객체의 실질적인 주소 인스턴스는 사실 다르다. (@~~~~~~~~ 주소값)   
+생성된 히카리 Connection객체를 Pool에서 직접적으로 꺼내어 사용할 때  
+실질적으로 JDBC Connection객체(conn0)이 각각의 Hicari프록시 객체에 Wrapping되어 제공된다. 
+
+DI 관점에서 DriverManagerDataSource에서 HikariDataSource로 변경을 해도 Repository의 코드는 전혀 변경하지 않아도 된다.
+Repository는 DataSource 인터페이스에만 의존하기 때문이다.
+이것이 DataSource를 사용하는 장점이다.
 
 
 
