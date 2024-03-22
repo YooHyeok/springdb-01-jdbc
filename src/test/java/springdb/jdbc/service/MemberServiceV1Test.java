@@ -55,5 +55,24 @@ class MemberServiceV1Test {
         assertThat(findMemberA.getMoney()).isEqualTo(8000);
         assertThat(findMemberB.getMoney()).isEqualTo(12000);
     }
+    @Test
+    @DisplayName("이체중 예외 발생 - MemberA의 값만 증가하고 바로 Exception이 터지므로 Exception이후의 MemberEx의 값은 감소되지 않고 롤백되지않고 커밋된다")
+    void accountTransferEx() throws SQLException {
+        //given
+        Member memberA = new Member(MEMBER_A, 10000);
+        Member memberEx = new Member(MEMBER_EX, 10000);
+        memberRepository.save(memberA);
+        memberRepository.save(memberEx);
 
+        //when
+        Assertions.assertThatThrownBy(()-> memberService.accountTransfer(memberA.getMemberId(), memberEx.getMemberId(), 2000))
+                .isInstanceOf(IllegalStateException.class); // meberA 값만 변경되고, memberEx의 값은 변경되지 않음
+
+        //then
+        Member findMemberA = memberRepository.findById(memberA.getMemberId());
+        Member findMemberEx = memberRepository.findById(memberEx.getMemberId());
+
+        assertThat(findMemberA.getMoney()).isEqualTo(8000);
+        assertThat(findMemberEx.getMoney()).isEqualTo(10000);
+    }
 }
