@@ -21,13 +21,13 @@ import static springdb.jdbc.connection.ConnectionConst.*;
  * 트랜잭션 - 커넥션 파라미터 전달 방식 동기화
  */
 @Slf4j
-class MemberServiceV3_1Test {
+class MemberServiceV3_2Test {
     public static final String MEMBER_A = "memberA";
     public static final String MEMBER_B = "memberB";
     public static final String MEMBER_EX = "ex";
 
     private MemberRepositoryV3 memberRepository;
-    private MemberServiceV3_1 memberService;
+    private MemberServiceV3_2 memberService;
 
     @BeforeEach // 각 테스트별 테스트 수행전 실행된다.
     void before() {
@@ -35,7 +35,7 @@ class MemberServiceV3_1Test {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
         memberRepository = new MemberRepositoryV3(dataSource);
         PlatformTransactionManager dataSourceTransactionManager = new DataSourceTransactionManager(dataSource);
-        memberService = new MemberServiceV3_1(dataSourceTransactionManager, memberRepository);
+        memberService = new MemberServiceV3_2(dataSourceTransactionManager, memberRepository);
     }
 
     @AfterEach // 각 테스트별 테스트 종료후 실행된다.
