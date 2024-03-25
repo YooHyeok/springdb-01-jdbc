@@ -967,7 +967,7 @@ public interface PlatformTransactionManager extends TransactionManager {
 ### ThreadLocal
 각각의 쓰레드마다 별도의 저장소가 부여되므로 해당 쓰레드만 해당 데이터에 접근가능.
 
-DataSourceUtils를 통해 Connection 획득 및 release
+# DataSourceUtils를 통해 Connection 획득 및 release
 ```java
     private void close(Connection con, Statement stmt, ResultSet rs) {
         JdbcUtils.closeResultSet(rs);
@@ -984,7 +984,7 @@ PlatformTransactionManager로부터 TransactionStatus객체를 반환받는다.
 (DefaultTransactionDefinition객체를 넘겨준다)  
 반환받은 TransactionStatus 객체로 부터 commit rollback을 호출할 수 잇다.
 ```java
-    private final PlatformTransactionManager transactionManager; // Test코드에서 DataSourceTransactoinManager 혹은 JpaTransactionManager를 주입받을 예정
+    private final PlatformTransactionManager transactionManager; // Test코드에서 DataSourceTransactionManager 혹은 JpaTransactionManager를 주입받을 예정
     private final MemberRepositoryV3 memberRepository;
     
     public void accountTransfer(String fromId, String toId, int money) throws SQLException {
@@ -1013,3 +1013,29 @@ PlatformTransactionManager로부터 TransactionStatus객체를 반환받는다.
         memberService = new MemberServiceV3_1(dataSourceTransactionManager, memberRepository);
     }
 ```
+
+Test코드에서 service코드 호출 전 PlatformTransactionManager의 구현체인 DataSourceTransactionManager에 의존성을 주입하며,  
+이때 DataSourceTransactionManager에 DataSource를 주입하며, Repository에도 동일한 DataSource를 주입한다.  
+
+서비스 계층의 Transaction이 적용될 특정 기능이 호출되었을 때, transaction 트랜잭션이 시작하는 시점에 주입받은   
+DataSourceTransactionManager로 부터 getTransaction()메소드를 호출함으로써 트랜잭션을 시작한다.    
+트랜잭션이 시작하기에 앞서 트랜잭션 매니저에 초기화한 DataSource를 통해 트랜잭션 매니저 내부적으로 커넥션을 생성한다.  
+
+생성된 커넥션은 트랜잭션 동기화 매니저에 보관한다.  
+`getTransaction` → {doGetTransaction → {`TransactionSynchronizationManager의 getResources`}}  
+커넥션을 수동커밋 모드로 변경하여 실제 데이터베이스 트랜잭션을 시작한다.  
+`getTransaction` → {startTransaction → {`doBegin`}}  
+커넥션이 시작된 후 커넥션을 동기화 매니저에 보관하는데, 이때 트랜잭션 동기화 매니저는 쓰레드 로컬에 커넥션을 보관한다.    
+(멀티 쓰레드 환경에서 안전하게 커넥션 보관)  
+`getTransaction` → {startTransaction → {doBegin → {`TransactionSynchronizationManager의 bindResource`}}}  
+
+이렇게 트랜잭션이 시작하고 Repository로부터 실제 JDBC를 수행하는 기능을 호출한다.  
+해당 기능들은 DataSourceUtils의 getConnection을 호출함으로써 트랜잭션 동기화 매니저에 보관된 커넥션을 꺼내어 사용한다.  
+위 과정을 통해 자연스럽게 같은 커넥션을 사용하고, 트랜잭션도 유지가 된다.  
+(Service에 트랜잭션 매니저를 주입하는 시점에 해당 트랜잭션 매니저에 주입된 DataSource와 동일한 DataSource를 Repository에도 함께 주입하기 때문)  
+
+getTransaction에 의해 반환받은 TransactionStatus 객체로 부터 Commit 혹은 Rollback을 호출하면, 트랜잭션이 종료된다.  
+`commit` → {processCommit → {cleanupAfterCompletion → {resume → {doResumeSynchronization → {resume → {`TransactionSynchronizationManager의 bindResource`}}}}}}  
+`rollback` → {processRollback → {cleanupAfterCompletion → {resume → {doResumeSynchronization → {resume → {`TransactionSynchronizationManager의 bindResource`}}}}}}  
+
+만약 JPA 기술을 사용한다면 DataSourceTransactionManager 대신 JpaTransactionManager를 PlatformTransactionManager의 구현체로 Service에 주입한다.  
