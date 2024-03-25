@@ -880,3 +880,136 @@ ex) select * from [테이블명] where [조건] `for update`;
 @Transaction을 거는 순간
 같은 커넥션(세션)에 대한 작업들이 하나의 트랜잭션으로 구성된다.  
 (기본적으로는 같은 커넥션이여도 각각의 쿼리 호출 단위로 트랜잭션이 처리됨)  
+
+# TransactionManager
+
+스프링에서 제공하는 TransactionManager는 크게 2가지 역할을 한다.
+1) 트랜잭션 추상화
+2) 리소스 동기화
+
+## 트랜잭션 추상화
+
+- JDBC: `con.setAutoCommit(false)`
+- JPA : `transaction.begin`
+
+```java
+Connection con = Datasource.getConnection();
+con.setAutoCommit(false); //트랜잭션 시작
+logic(em);
+con.commit(); // 커밋
+```
+
+```java
+EntityManagerFactory emf = Persistence.createEntityManagerFactory("transaction")
+EntityManager em = emf.createEntityManager();
+EntityTransaction tx = em.getTransaction();
+tx.begin(); //트랜잭션 시작
+logic(em);
+tx.commit(); // 커밋
+```
+
+트랜잭션을 사용하는 코드는 데이터 접근 기술마다 다르기 때문에,
+위와같이 JDBC에서 JPA로 데이터 접근 기술을 변경하게 될 경우
+서비스 계층의 트랜잭션을 처리하는 코드도 모두 함께 변경되어야 한다.
+
+이는 단일책임 원칙을 위배한다.
+즉, 변경 포인트가 하나일 때 버그가 다연발로 여러곳에서 수정해야한다.
+
+트랜잭션을 추상화하면 해결 가능하다.
+```java
+public interface TxManager {
+	begin();
+	commit();
+	rollback();
+}
+```
+```java
+public JdbcTxManager implements TxManager {}
+```
+```java
+public JpaTxManager implements TxManager {}
+```
+
+스프링이 제공하는 트랜잭션 추상화 기능을 사용하면 된다.
+(데이터 접근 기술에 따른 트랜잭션 구현체도 대부분 구현되어 있음)
+
+### `PlatformTransactionManager`
+```java
+public interface PlatformTransactionManager extends TransactionManager {
+	/* Transaction 시작 메소드 */
+	TransactionStatus getTransaction(@Nullable TransactionDefinition definition) throws TransactionException;
+	/* Commit Rollback 메소드 */
+	void commit(TransactionStatus status) throws TransactionException;
+	void rollback(TransactionStatus status) throws TransactionException;
+}
+```
+- `getTransaction()` : 트랜잭션을 시작한다.
+    - getTransacton의 의미 -기존 진행중인 트랜잭션이 있는 경우 해당 트랜잭션울 가져와 참여할 수 있기 때문.
+- `commit()`
+- `rollback()`
+
+
+## 리소스 동기화
+트랜잭션을 유지하려면 트랜잭션의 시작부터 끝까지 같은 데이터베이스 커넥션을 유지해야 한다.
+같은 커넥션을 동기화하기 위해서 스프링은 트랜잭션 동기화 매니저를 제공한다.
+`TransactionSycnchronizationManager`
+
+- 트랜잭션 매니저 내부에서 작동하는 트랜잭션 동기화 매니저는 쓰레드 로컬(`ThreadLocal`)을 사용해서 커넥션을 동기화해준다.  
+- 트랜잭션 동기화 매니저는 쓰레드 로컬을 사용하기 때문에 멀티쓰레드 상황에서 안전하게 커넥션을 동기화 할 수 있으므로  
+  동일한 커넥션이 필요하면 트랜잭션 동기화 매니저를 통해 커넥션을 획득한다.
+
+### 동작 방식
+1) 데이터 소스로 부터 트랜잭션 시작을 위한 커넥션을 획득 후, 트랜잭션 시작.
+2) 트랜잭션 매니저는 트랜잭션이 시작된 커넥션을 트랜잭션 동기화 매니저에 보관.
+3) 리포지토리는 트랜잭션 동기화 매니저에 보관된 커넥션을 꺼내 사용.
+4) 트랜잭션 종료 후 트랜잭션 매니저는 트랜잭션 동기화 매니저에 보관된 커넥션을 통해 트랜잭션 종료 및 커넥션 close
+
+### ThreadLocal
+각각의 쓰레드마다 별도의 저장소가 부여되므로 해당 쓰레드만 해당 데이터에 접근가능.
+
+DataSourceUtils를 통해 Connection 획득 및 release
+```java
+    private void close(Connection con, Statement stmt, ResultSet rs) {
+        JdbcUtils.closeResultSet(rs);
+        JdbcUtils.closeStatement(stmt);
+        DataSourceUtils.releaseConnection(con, dataSource); //Connection Release
+    }
+    
+    private Connection getConnection() throws SQLException {
+        Connection con = DataSourceUtils.getConnection(dataSource);
+        return con;
+    }
+```
+PlatformTransactionManager로부터 TransactionStatus객체를 반환받는다.  
+(DefaultTransactionDefinition객체를 넘겨준다)  
+반환받은 TransactionStatus 객체로 부터 commit rollback을 호출할 수 잇다.
+```java
+    private final PlatformTransactionManager transactionManager; // Test코드에서 DataSourceTransactoinManager 혹은 JpaTransactionManager를 주입받을 예정
+    private final MemberRepositoryV3 memberRepository;
+    
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+        //트랜잭션 시작
+        TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+        try {
+            bizLogic(fromId, toId, money); // 비즈니스 로직
+            transactionManager.commit(status); // 성공시 커밋
+        } catch (Exception e) {
+            transactionManager.rollback(status); // 실패시 롤백
+            throw new IllegalStateException(e);
+        }
+    }
+
+```
+
+실제 수행시 DataSourceTransactionManager를 Service의 PlatformTransactionManager에 주입해야 한다.
+이때, DataSourceTransactionManager에는 Repository에 주입되는 동일한 Datasource가 주입되어야 한다.
+```java
+    @BeforeEach // 각 테스트별 테스트 수행전 실행된다.
+    void before() {
+        //의존성 주입
+        DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        memberRepository = new MemberRepositoryV3(dataSource);
+        PlatformTransactionManager dataSourceTransactionManager = new DataSourceTransactionManager(dataSource);
+        memberService = new MemberServiceV3_1(dataSourceTransactionManager, memberRepository);
+    }
+```
