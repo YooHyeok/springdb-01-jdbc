@@ -29,7 +29,7 @@ class MemberServiceV1Test {
     private MemberServiceV1 memberService;
 
     @BeforeEach // 각 테스트별 테스트 수행전 실행된다.
-    void befor() {
+    void before() {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(URL, USERNAME, PASSWORD);
         //의존성 주입
         memberRepository = new MemberRepositoryV1(dataSource);
