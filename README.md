@@ -1039,3 +1039,73 @@ getTransaction에 의해 반환받은 TransactionStatus 객체로 부터 Commit 
 `rollback` → {processRollback → {cleanupAfterCompletion → {resume → {doResumeSynchronization → {resume → {`TransactionSynchronizationManager의 bindResource`}}}}}}  
 
 만약 JPA 기술을 사용한다면 DataSourceTransactionManager 대신 JpaTransactionManager를 PlatformTransactionManager의 구현체로 Service에 주입한다.  
+
+# 트랜잭션 템플릿 - 템플릿 콜백 패턴
+일반적으로 TransactionManager를 사용하여 트랜잭션 시작, 비즈니스로직 호출, 성공시 커밋, 예외발생시 롤백한다.  
+코드는 `try~catch~finally`를 포함한 `성공-커밋`, `실패-롤백` 형태로 구현되어 있으며 다른 서비스에서도 해당 코드 형태가 반복될것이다.  
+템플릿 콜백 패턴을 활용하면 이런 반복되는 코드형태의 문제를 해결할 수 있다.
+```java
+public class TransactionTemplate {
+    private PlatformTransactionManager transactionManager;
+    public <T> execute(TransactionCallback<T> action) {/* ... */}
+    void executeWithoutResult(Consumer<TransactionStatus> action) {/* ... */}
+}
+```
+
+- `execute()`: 반환값이 있을 때 사용.
+- `executeWithoutResult()`: 반환 값이 없을 때 사용.
+
+## 예제 코드
+
+### 기존 코드는 아래와 같다.
+```java
+@RequiredArgsConstructor
+public class MemberServiceV3_1 {
+    private final PlatformTransactionManager transactionManager;
+    private final Repository repository;
+
+    public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+        //트랜잭션 시작
+        TransactionStatus status = transactionManager.getTransaction(new DefaultTransactionDefinition());
+        try {
+            bizLogic(fromId, toId, money); // 비즈니스 로직
+            transactionManager.commit(status); // 성공시 커밋
+        } catch (Exception e) {
+            transactionManager.rollback(status); // 실패시 롤백
+            throw new IllegalStateException(e);
+        }
+    }
+}
+```
+
+### TransactionTemplate - Service에서의 의존성 주입
+생성자에 의해 Test코드로부터 PlatformTransactionManager을 주입받은 TransactionTemplate을 주입한다.
+```java
+public class Service { 
+    private final TransactionTemplate txTemplate;
+    private final Repository repository;
+    public MemberServiceV3_2(PlatformTransactionManager transactionManager, Repository repository) {
+        this.txTemplate = new TransactionTemplate(transactionManager);
+        this.memberRepository = memberRepository;
+    }
+}
+```
+
+### 템플릿 사용 로직
+익명 구현 객체를 람다식으로 구현하며, 실행할 비즈니스로직을 작성한다.  
+(람다식의 매개변수는 TransactionStatus 객체이다. - `Consumer<TransactionStatus>`)  
+이때 TransactionTemplate의 execute/executeWithoutResult에서는 SQLException을 처리할 수 없으므로 try~catch 구문을 사용하여  
+발생하는 SQLException을 직접 던져준다.
+```java
+```java
+txTemplate.executeWithoutResult((status) -> {
+    try {
+        //비즈니스 로직
+        bizLogic(fromId, toId, money);
+    } catch (SQLException e) {
+        throw new IllegalStateException(e);
+    }
+});
+
+```
+
