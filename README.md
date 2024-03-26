@@ -950,8 +950,8 @@ public interface PlatformTransactionManager extends TransactionManager {
 
 
 ## 리소스 동기화
-트랜잭션을 유지하려면 트랜잭션의 시작부터 끝까지 같은 데이터베이스 커넥션을 유지해야 한다.
-같은 커넥션을 동기화하기 위해서 스프링은 트랜잭션 동기화 매니저를 제공한다.
+트랜잭션을 유지하려면 트랜잭션의 시작부터 끝까지 같은 데이터베이스 커넥션을 유지해야 한다.  
+같은 커넥션을 동기화하기 위해서 스프링은 트랜잭션 동기화 매니저를 제공한다.  
 `TransactionSycnchronizationManager`
 
 - 트랜잭션 매니저 내부에서 작동하는 트랜잭션 동기화 매니저는 쓰레드 로컬(`ThreadLocal`)을 사용해서 커넥션을 동기화해준다.  
@@ -1108,4 +1108,101 @@ txTemplate.executeWithoutResult((status) -> {
 });
 
 ```
+# 선언적 트랜잭션 관리 - @Transaction과 Spring AOP
 
+## 프록시 - 트랜잭션 적용 분리
+트랜잭션을 처리하는 객체와 비즈니스 로직을 처리하는 서비스객체를 명확하게 분리할 수 있다.  
+트랜잭션 프록시에 트랜잭션 처리 로직을 모두 전가하고, 해당 프록시에서 트랜잭션 시작 후 실제  서비스를 호출한다.  
+트랜잭션을 처리하는 프록시 코드는 스프링이 제공하는 AOP에 의해 생성되고 스프링 빈으로 등록한다.
+
+## Spring 트랜잭션 AOP  
+스프링이 제공하는 트랜잭션 AOP기능을 사용하면 프록시를 매우 편리하게 적용 가능하다.  
+트랜잭션 처리가 필요한 곳에 @Transaction 애노테이션만 붙여주면 된다.
+
+## Spring AOP와 트랜잭션 Proxy의 원리
+@Transaction이 붙어있으면 Spring이 해당 서비스를 상속받아 트랜잭션Proxy로 재구현되며,  
+Proxy에 구현된 트랜잭션 적용 로직에서 @Transaction 애노테이션으로 적용된 메소드가 호출된다.  
+이후 해당 로직이 적용된 트랜잭션Proxy(Service)가 Spring Bean에 등록된다.  
+트랜잭션 Proxy에 의해 관리되는 메소드가 호출될 경우 AOP에 의해 Transaction이 적용된다.  
+이때 서비스를 상속받아 트랜잭션이 적용되는 메소드는 @Transaction 어노테이션의 레벨에 따라 달라진다.  
+클래스레벨일 경우 모든 메소드에 적용, 메소드레벨일 경우 해당 메소드에만 적용  
+(메소드 레벨에만 적용되더라도 Service 인스턴스 자체가 Proxy로 감싸지지만, 트랜잭션은 애노테이션이 붙은 메소드에만 적용된다.)
+
+## Service 코드
+기존 TransactionTemplate를 걷어내고, 비즈니스 메소드만 남겨두고 메소드 레벨에 @Transactional 애노테이션만 붙여준다.
+```java
+@Transactional
+public void accountTransfer(String fromId, String toId, int money) throws SQLException {
+	bizLogic(fromId, toId, money);
+}
+```
+
+## Test 코드
+
+### @SpringBootTest
+테스트 코드에서 Spring AOP를 적용하려면 Spring 컨테이너가 필요하다.  
+`@SpringBootTest` 애노테이션을 선언하면 테스트시 SpringBoot를 통해 Spring컨테이너를 생성하며,  
+@Autowired등을 통해 Spring컨테이너가 관리하는 빈들을 사용할 수 있다.
+### @TestConfiguration
+기존 생성자로 주입하던 DataSource와, PlatformTransactionManager 또는 Service와 Repository등이   
+이제는 @SpringBootTest에 의해 Spring 테스트로 진행하게 되기 때문에 해당 객체들을 Spring컨테이너에  
+빈으로 등록해야 테스트를 수행할 수 있다.  
+따라서 `@TestConfiguration` 애노테이션을 선언하여 테스트클래스 안에 내부 설정클래스를 만들어  
+의존성 주입이 필요한 클래스들을 @Bean애노테이션을 통해 빈으로 등록하여 관리한다.
+
+```java
+@SpringBootTest // Spring Bean에 대한 의존관계 주입이 된다.
+class TransactionAopTest {
+	@Autowired
+    private MemberRepositoryV3 memberRepository;
+    @Autowired
+    private MemberServiceV3_3 memberService;
+	
+	@TestConfiguration
+	static class TestConfig {
+        @Bean
+        DataSource dataSource() {
+            return new DriverManagerDataSource(URL, USERNAME, PASSWORD);
+        }
+        @Bean
+        PlatformTransactionManager transactionManager() {
+            return new DataSourceTransactionManager(dataSource());
+        }
+        @Bean
+        MemberRepositoryV3 memberRepositoryV3() {
+            return new MemberRepositoryV3(dataSource());
+        }
+        @Bean
+        MemberServiceV3_3 memberServiceV3_3() {
+            return new MemberServiceV3_3(memberRepositoryV3());
+        }
+    }
+}
+```
+@Transaction 애노테이션에 의해 트랜잭션이 적용된 Service의 비즈니스로직을 호출할 경우  
+트랜잭션 AOP 프록시에 의해 트랜잭션이 시작(TxManager-getTransaction)되면, 트랜잭션 매니저로부터 트랜잭션을 시작(setAutoCommit-false)하고,  
+트랜잭션 매니저 주입당시 트랜잭션 매니저에 초기화된 받은 DataSource로 부터 Connection을 생성하여 트랜잭션 동기화 매니저에 보관한다.    
+AOP에 의해 실제 서비스의 비즈니스로직이 호출되고, 동일한 DataSource를 주입받은 리포지토리의 데이터접근로직이 호출되면    
+트랜잭션 동기화 매니저로부터, 트랜잭션 동기화 커넥션을 획득하게된다.  
+(리포지토리 비즈니스로직이 2번 호출된더라도 JDBC를 실행하기 위한 Connection은  DataSourceUtils의 getConnection 즉, 동기화된 동일한 커넥션을 계속해서 유지한다.)  
+
+# SpringBoot 자동 Resource 등록
+
+제목 그대로 SpringBoot는 특별한 빈등록이 없다면, DataSource와 TransactionManager를 자동으로 등록해 준다.  
+바로 위에서는 @TestConfiguration에서 DriverManagerDataSource와 PlatformTransactionManager를 Bean으로 등록했다.  
+이렇게 개발자가 직접 데이터소스, 트랜잭션매니저를 빈으로 등록하면 SpringBoot는 두 객체를 자동으로 빈 등록하지 않는다.  
+
+### DataSource 자동 등록
+```properties
+spring.datasource.url=jdbc:h2:tcp://localhost/~/db명
+spring.datasource.username=sa
+spring.datasource.password=
+```
+데이터 소스에 대한 빈 등록 로직을 직접 작성하지 않는다면 SpringBoot는 application.properties에 위와같이 입력된  
+DataSource에 대한 정보를 사용해 DataSource를 생성하고 Spring Bean에 등록한다.  
+(`spring.datasource.url` 속성이 없으면 내장 데이터베이스-메모리DB를 생성하려고 시도한다.)  
+### TransactionManager 자동 등록
+트랜잭션 매니저가 자동으로 등록될 때 어떤 트랜잭션 매니저를 선택할지는 현재 등록된 라이브러리를 보고 판단한다.  
+(application.properties의 url 가장 앞에 jdbc로 시작하므로 DataSourceTransactionManager가 적용.)
+JDBC기술을 사용하면 DataSourceTransactionManager를 Bean으로 등록하고, JPA 혹은 JDBC 둘다 사용하면 JpaTransactionManger를 등록한다.   
+(JpaTransactionManager는 DataSourceTransactionManager가 제공하는 기능도 대부분 지원한다.)  
