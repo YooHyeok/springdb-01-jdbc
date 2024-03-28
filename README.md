@@ -1206,3 +1206,78 @@ DataSource에 대한 정보를 사용해 DataSource를 생성하고 Spring Bean�
 (application.properties의 url 가장 앞에 jdbc로 시작하므로 DataSourceTransactionManager가 적용.)
 JDBC기술을 사용하면 DataSourceTransactionManager를 Bean으로 등록하고, JPA 혹은 JDBC 둘다 사용하면 JpaTransactionManger를 등록한다.   
 (JpaTransactionManager는 DataSourceTransactionManager가 제공하는 기능도 대부분 지원한다.)  
+
+# 자바 예외
+- `Checked`: 컴파일러가 체크하는 예외
+- `UnChecked`: 컴파일러가 체크하지 않는 예외 
+
+ - ### Throwable - 최상위 예외
+   - **Exception (`Checked`)**  
+     애플리케이션 로직에서 사용할 수 있는 실질적 최상위 예외로 `Exception`과 그 하위 예외는 모두 컴파일러가 체크하는 `Check`예외이다.  
+     (단, `RuntimeException`은 `UnChecked`임.)
+     - SQLException
+     - IOException
+     - **RuntimeException (`UnChecked`)**  
+       - NullPointerException
+       - IllegalArgumentException
+   - **Error**  
+        메모리 부족 혹은 심각한 시스템 오류와 같은 애플리케이션에서 복구가 불가능한 시스템예외  
+        개발자는 해당 예외를 잡으려고 해서는 안된다. (그냥 두면 됨)
+     - 일반적으로 상위 예외를 Catch로 잡으면 하위 예외까지 잡는데, 만약 애플리케이션 로직에서 `Throwable` 예외를 잡으면
+       Error예외도 함께 잡을 수 있기 때문이다.
+     - OutOfMemoryError
+
+    ## Check 예외 기본 규칙
+    예외는 폭탄 돌리기와 같다.  
+    잡아서 처리하거나, 처리할 수 없으면 밖으로 던져야 한다.  
+    
+    예를들어 `Controller` → `Service` → `Repository` 구성에서 Repository에서 Exception이 발생한다.  
+    만약 `Repository`에서 예외를 처리하지 못한다면 `Service`에게 예외를 던져야 한다.  
+    `Service`에서 예외를 처리하게 되면, 이후에는 애플리케이션 로직이 정상 흐름으로 동작한다.  
+    반면, `Service` 에서 예외를 처리하지 못한다면, `Service`를 호출한 `Controller`에 예외를 던진다.  
+    이와같이 예외를 처리하지 못하면 호출한 곳으로 계속해서 예외를 던지게 된다.
+
+    ### 2가지 기본 규칙
+     1) 예외는 잡아서 처리하거나 던져야 한다.
+     2) 잡거나 던질 때 지정한 예외 뿐만 아니라 그 예외의 자식들도 함께 처리된다.
+        - `Exception`을 `catch`로 잡으면 그 하위 예외들도 모두 잡을 수 있다.
+        - `Exception`을 `throw`로 던지면 그 하위 예외들도 모두 던질 수 있다.
+     
+    <br>
+
+    #### 만약 이러한 예외를 처리하지 못하고 계속해서 메소드 호출부로 예외를 던지면 어떻게 될까?  
+    자바 `main()`  쓰레드의 경우 예외 로그를 출력하면서 시스템이 종료된다.
+    하지만 웹 애플리케이션의 경우 여러 사용자의 요청을 처리하므로 하나의 예외 때문에 시스템이 종료되면 안되기 때문에  
+    WAS가 해당 예외를 받아 처리하는데, 주로 사용자에게 개발자가 지정한 오류페이지를 보여준다.  
+
+    #### Checked 예외의 장단점
+    체크 예외는 예외를 잡아 처리할 수 없을 때 예외를 밖으로 던지는 `throws Exception`을 필수로 선언해야 한다.  
+    그렇지 않으면 컴파일 오류가 발생하며, 이러한 Checked Exception의 방식은 장점과 단점이 동시에 존재한다.  
+    - 장점: 개발자가 실수로 예외를 누락하지 않도록 컴파일러를 통해 문제를 잡아주는 훌륭한 안전장치이다.
+    - 단점: 실제로는 개발자가 모든 체크 예외를 반드시 잡거나 던지도록 처리해야 하기 때문에, 너무 번거로우며, 크게 신경쓰고 싶지 않은
+        예외까지 모두 챙겨야 한다. (의존관계에 따른 단점도 존재한다.)
+
+    ## UnChecked 예외 기본 규칙
+    RuntimeException과 그 하위 예외는 모두 Unchecked 예외로 분류되며 Unchecked 예외란 말그대로 컴파일러가 예외를 체크하지 않는다는 뜻이다.    
+    기본적으로 Checked예외와 동일 즉, 모든 예외는 잡아서 처리하거나 던져야 하지만 차이가 있다면 예외를 던지는 `throws`를 선언하지 않고, 생략이 가능하다.  
+    (이 경우 자동으로 예외를 던짐)
+
+    ### CheckedException vs UnCheckedException  
+     - `Checked-Exception`: 예외를 잡아서 처리하지 않으면 항상 `throws`에 던지는 예외를 선언해야 함
+     - `UnChecked-Exception`: 예외를 잡아서 처리하지 않아도 `throws` 생략 가능  
+   
+    언체크 예외도 `throws 예외`를 적용해도 되며, 주로 생략하지만, 중요한 예외의 경우 이렇게 선언해 두면 해당 코드를 호출하는 개발자가 이런 예외가 발생한다는 점을 
+    IDE를 통해 좀 더 편리하게 인지할 수 있다. (컴파일 시점에 막을 수 있는 것은 아니고, IDE를 통해 인지할 수 있는 정도)
+
+    ### Unchecked 예외의 장단점
+     - `장점`: 신경 쓰고 싶지 않은 언체크 예외를 무시할 수 있음.  
+            체크예외의 경우 처리할 수 없는 예외를 밖으로 던지려면 항상 `throws 예외`를 선언해야 하지만, 언체크 예외는 이 부분 생략이 가능하다.  
+            또한 신경쓰고 싶지 않은 예외의 의존관계를 참조하지 않아도 되는 장점이 있다.
+     - `단점`: 언체크 예외는 개발자가 실수로 예외를 누락할 수 있음.  
+            (반면 체크 예외는 컴파일러를 통해 예외 누락을 잡아준다.)
+
+
+
+
+
+
