@@ -1276,8 +1276,97 @@ JDBC기술을 사용하면 DataSourceTransactionManager를 Bean으로 등록하�
      - `단점`: 언체크 예외는 개발자가 실수로 예외를 누락할 수 있음.  
             (반면 체크 예외는 컴파일러를 통해 예외 누락을 잡아준다.)
 
+# 체크 예외 활용
 
+- 기본적으로는 언체크(런타임) 예외를 사용한다.
+- 체크 예외는 비즈니스 로직상 의도적으로 던지는 예외에만 사용
+  - 예외를 받아서 반드시 처리해야만 하는 문제일 때만 체크 예외를 사용  
+    **[체크예외 예시]**
+    - 계좌 이체 실패 예외
+    - 결제시 부족 포인트 부족 예외
+    - 로그인 ID/PW 불일치 예외  
+    위 예시의 경우라도 100% 체크 예외로 만들어야 하는 것은 아님.  
+    계좌 이체 실패처럼 매우 심각한 문제는 개발자가 실수로 예외를 놓치면 안된다고 판단할 수 있으므로  
+    체크 예외로 만들어 두면 컴파일러를 통해 놓친 예외를 인지할 수 있다.
 
+체크 예외는 컴파일러가 예외 누락을 체크해주기 때문에 개발자가 실수로 예외를 놓치는 것을 막아준다.  
+그래서 항상 명시적으로 예외를 잡아서 처리하거나, 처리할 수 없을 때는 예외를 던지도록 `method() throws 예외` 로 선언해야 한다.
 
+### 체크 예외의 문제점
 
+1) **복구 불가능한 예외**  
+   대부분의 예외는 복구가 불가능하다.(일부 복구가 가능한 예외도 있으나 아주 적다.)  
+    `SQLException`을 예를 들면 데이터베이스에 문제가 발생하는 예외로 SQL문법의 문제 혹은 데이터베이스 서버 문제 등이 있고    
+    이런 문제들은 대부분 복구가 불가능하다.
+    대부분의 서비스나 컨트롤러는 이런 문제를 해결할 수 없기 때문에 이러한 문제들은 일관성 있게 공통으로 처리해야 한다.  
+    오류 로그를 남기고 개발자가 해당 오류를 빠르게 인지하는 것이 필요하며, 웹 애플리케이션 에서는 `서블릿 필터`, `인터셉터`,
+    `ControllerAdvice`를 사용하면 이런 오류에 대한 처리를 깔끔하게 공통으로 해결할 수 있다.
+2) **의존 관계에 대한 문제**
+   `java.sql.SQLException`에 의존하는 `throws SQLException`을 예로들면 향후 Repository를 JDBC가 아닌 JPA와 같은  
+    다른 기술로 변경할때, `JPAException`으로 예외가 변경된다면 `SQLExeption`에 의존하던 모든 서비스, 컨트롤러 코드를 모두  
+    `JPAException`에 의존하도록 고쳐야한다.
 
+처리할 수 있는 체크 예외라면 서비스나 컨트롤러에서 처리하겠지만, 데이터베이스나 네트워크 통신처럼 시스템 레벨에서 올라온 예외들은  
+대부분 복구가 불가능하며, 실무에서 발생하는 대부분의 예외들은 이러한 시스템 예외들이다.
+문제는 이러한 경우 체크 예외를 사용하면 Repository에서 올라온 복구 불가능한 예외를 Service, Controller 같은 각각의 클래스가 모두  
+알고 있어야 하며 이로인해 불필요한 의존관게 문제도 발생하게 된다.  
+
+###  throws Exception
+`SQLException`, `ConnectException` 같은 시스템 예외를 최상위 예외인 `Exception`으로 던져도 문제를 해결할 수는 있다.    
+`Exception`으로 던지면 `Exception`은 물론이고 그 하위의`SQLException`, `ConnectException`도 함께 던지게 된다.    
+코드가 깔끔해지는 것 같으나 `Exception`은 최상위 타입이므로 모든 체크예외를 다 밖으로 던지는 문제가 발생한다.  
+결과적으로 체크 예외의 최상위 타입인 `Exception`을 던지게 되면 다른 체크 예외를 체크할 수 있는 기능이 무효화 되고, 중요한 체크 예외를 다 놓치게 된다.    
+(최상위 타입이므로 어떤 예외가 발생했는지 컴파일 단계에서 체크가 불가능해진다? 이를테면 IDE)  
+예를들어 중간에 중요한 체크 예외가 발생해도 컴파일러는 `Exception`을 던지기 때문에 문법에 맞다고 판단해서 컴파일 오류가 발생하지 않는다.  
+모든 예외를 다 던지기 때문에 체크 예외를 의도한 대로 사용하는 것이 아니기 때문에 `Exception`은 안티패턴중 하나로 본다.    
+꼭 필요한  경우가 아니면 `Exception` 자체를 밖으로 던지는 것은 좋지 않은 방법이다.  
+
+이에대한 대안은 Uncheck - 즉, RuntimeException을 활용하는 것이다.
+
+### RuntimeException
+시스템에서 발생한 복구 불가능한 예외에 런타임 예외를 사용하여 서비스나 컨트롤러가 복구 불가능한 예외를 신경쓰지 않게 할 수 있다.    
+(물론 이렇게 복구 불가능한 예외는 일관성 있게 공통으로 처리해야함)  
+또한 의존 관계에 대한 문제도 예외에 강제로 의존해야하는 체크예외와는 다르게 런타임 예외를 사용하면 해당 객체가 처리할 수 없는 예외는 무시하면 된다.    
+(자동으로 전가되기 때문에, 해당 예외가 발생하는 곳에서만 사용하는 기술에 따라 변경하면 됨)
+결과적으로 해당 메소드 호출부 메소드에서 더이상 `throws`를 하지 않아도 자동으로 `throws`된다.
+
+체크예외 구현기술 변경에 대한 파급 효과로 중간에 기술이 변경되더라도 해당 예외를 사용하지 않는 컨트롤러, 서비스에서는 더이상 코드를 변경하지 않아도 되고,  
+다만. 예외를 공통으로 처리하는 곳에서는 예외에 따른 처리가 필요할 수 있으며, 공통으로 처리하는 한 곳만 변경하면 되기 땜누에 변경의 영향 범위가 최소화 된다.  
+
+## 정리
+처음 자바를 설계할 당시에는 체크 예외가 더 나은 선택이라고 생각했기 때문에 자바가 기본으로 제공하는 기능들에는 체크 예외가 많다.    
+시간이 흐르면서 라이브러리를 점덤 더 많이 사용하면서 처리해야 하는 예외와 복구할 수 없는 예외가 너무 많아졌다.  
+체크 예외는 라이브러리들이 제공하는 모든 예외를 처리할 수 없을 때마다 `throws`에 예외를 덕지덕지 붙여야 했고,  
+이로인해 개발자들은 `throws Exception` 이라는 극단적? 안티패턴 방법도 자주 사용하게 되었다.  
+이러한 문제점 때문에 최근 라이브러리 들은 대부분 런타임 예외를 기본적으로 제공한다.  
+(Spring도, 위에서 예를 든 JPA 기술도 RuntimeException을 사용한다.)  
+런타임 예외도 필요하면 잡을 수 있기 때문에 필요한 경우에는 잡아서 처리하고, 그렇지 않으면 자연스럽게 던져 공통으로 처리하는 부분을 만들어서 처리하면 된다.  
+
++) 런타임 예외는 놓칠 수 있기 때문에 문서화가 중요하다.  
+
+### 런타임 에러 문서화 예시
+
+**JPA EntityManager**
+```java
+/**
+ * Make an instance managed and persistent.
+ * @param entity entity instance
+ * @throws EntityExistsException if the entity already exists. 
+ * @throws IllegalArgumentException if the instance is not an entity 
+ * @throws TransactionRequiredException if there is no transaction when
+ *          invoked on a container-managed entity manager of that is of type
+ *          <code>PersistenceContext.TRANSACTION</code>
+ */
+public void persist(Object entity);
+```
+**JdbcTemplate(JdbcOperations)**  - 문서화 뿐만 아니라 코드에도 명시
+```java
+	/**
+	 * Issue a single SQL execute, typically a DDL statement.
+	 * @param sql static SQL to execute
+	 * @throws DataAccessException if there is any problem
+	 */
+	void execute(String sql) throws DataAccessException;
+```
+
+#### *Tip + ) 예외를 전환할 때는 꼭 기존 예외를 포함해야 한다!*
