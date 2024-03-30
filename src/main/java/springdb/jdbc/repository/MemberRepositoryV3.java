@@ -128,7 +128,7 @@ public class MemberRepositoryV3 {
      * 기본적으로 새로운 커넥션을 생성하며, 트랜잭션 동기화매니저가 관리하는 커넥션이 있으면, 해당 커넥션을 반환한다.
      * @return
      */
-    private Connection getConnection() throws SQLException {
+    private Connection getConnection() {
         Connection con = DataSourceUtils.getConnection(dataSource);
         log.info("getConnection={}, classes={}", con, con.getClass());
         return con;
