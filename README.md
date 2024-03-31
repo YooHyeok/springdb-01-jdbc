@@ -1370,3 +1370,116 @@ public void persist(Object entity);
 ```
 
 #### *Tip + ) 예외를 전환할 때는 꼭 기존 예외를 포함해야 한다!*
+
+# 체크 예외와 인터페이스
+서비스 계층은 가급적 특정 구현 기술에 의존하지 않고, 순수하게 유지하는것이 좋다.  
+그러기 위해서는 예외에 대한 의존을 함께 해결해야 한다.  
+예를들어 서비스가 처리할 수 없는 SQLException에 대한 의존을 제거하기 위해서는 Repository가 던지는 SQLException 체크 예외를  
+런타임 예외로 전환해서 서비스 계층에 던진다.  
+서비스 계층이 해당 예외를 무시할 수 있기 때문에, 특정 구현 기술에 의존하는 부분을 제거하고 서비스 계층을 순수하게 유지할 수 있다.  
+
+아래 코드로 예로 들어본다.
+
+```java
+public interface MemberRepository {
+    Member save(Member member);
+    Member findById(String memberId);
+    void update(String memberId, int money);
+    void delete(String memberId);
+}
+```
+
+```java
+public class MemberRepositoryImpl implements MemberRepository {
+    @Override
+    Member save(Member member) {/*생략*/};
+    @Override
+    Member findById(String memberId) {/*생략*/};
+    @Override
+    void update(String memberId, int money) {/*생략*/};
+    @Override
+    void delete(String memberId) {/*생략*/};
+}
+```
+
+위와같이 MemberRepository를 인터페이스 구현하고, 서비스에서 인터페이스로 해당 구현체 클래스를 생성자 주입을 통해 주입받는다.
+이렇게 되면, 서비스는 인터페이스에만 의존하게 된다.  
+구현 기술을 변경하고 싶다면 위와같이 DI를 적용하여 Service코드의 변경 없이 구현 기술을 변경할 수 있다.  
+
+## 체크 예외 코드에 인터페이스 도입시 문제점
+
+- MemberRepository 구현체
+    ```java
+    public class MemberRepositoryImpl implements MemberRepository {
+        @Override
+        Member save(Member member) throws SQLException{/*생략*/};
+    }
+    ```
+- MemberRepository 인터페이스
+    ```java
+    public interface MemberRepositoryImpl {
+        Member save(Member member) throws SQLException;
+    }
+    ```
+- MemberService 클래스 - 인터페이스-구현체 의존성 주입
+    ```java
+    public class MemberService {
+  
+        private final MemberRepository memberRepository;
+  
+        public MemberService(MemberRepositoryImpl memberRepositoryImpl) {
+            this.memberRepository = memberRepositoryImpl;
+        }
+  
+    } 
+    ```
+
+위와같이 구현체 클래스에서 체크 예외를 던지면 인터페이스 메서드에 먼저 체크 예외를 던지는 부분이 선언되어 있어야 구현 클래스의 메서드도 체크 예외를 던질 수 있다.
+(컴파일 오류 발생함)  
+
+참고로 구현 클래스의 메서드에 선언할 수 있는 예외는 부모 타입에서 던진 예외와 같거나 하위 타입이어야 한다.
+예를들어 인터페이스 메서드에 throws Exception을 선언하면, 구현 클래스 메서드에 throws SQLException이 가능하다.  
+(SQLException은 Exception의 하위타입 이기 때문.)  
+하지만, 이는 안티패턴이므로 사용을 지양한다.
+
+### *특정 기술에 종속되는 인터페이스*
+구현 기술을 쉽게 변경하기 위해서 위와같은 방식을 적용해 인터페이스를 도입하더라도,  
+SQLException과 같은 특정 구현 기술에 종속적인 체크 예외를 사용하게 되면 인터페이스에도 해당 예외를 포함해야 한다.  
+그러나 SQLException에 의해 JDBC 기술에 종속적인 인터페이스이므로, JDBC가 아닌 다른 기술로 변경한다면 인터페이스 자체를 변경해야 한다.
+이는 순수한 인터페이스의 목적, 순기능(OCP와 DI)과는 거리가 멀다.
+
+이때 런타임 예외를 적용하면 해결할 수 있게 된다.  
+바로 런타임 예외를 상속받은 클래스에, 체크예외를 전가(Wrapping)하는 방법이다.  
+
+### 체크 예외 런타입 예외로 변환
+
+- 변환용 예외 클래스  
+    RuntimeException을 상속받음으로써 해당 클래스는 RuntimeException이 된다.
+    ```java
+    public class MyDbException extends RuntimeException {
+        public MyDbException() {
+        }
+        public MyDbException(String message) {
+            super(message);
+        }
+        public MyDbException(String message, Throwable cause) {
+            super(message, cause);
+        }
+        public MyDbException(Throwable cause) {
+            super(cause);
+        }
+    }
+    ```
+- 체크 예외 언체크 예외로 변환
+    ```java
+    try { /*생략*/ }
+    catch (SQLException e) {
+        throw new MyDbException(e) // 체크 예외 런타임 예외클래스에 전가
+    }
+    ```
+기존 예외를 생성자를 통해 전달함으로써 체크 예외를 언체크 예외로 변환한다.
+즉, 컴파일러가 더이상 해당 예외를 체크하지 않고 예외처리를 강제하지 않게 된다.
+
+#### 정리
+ - 체크 예외를 런타임 예외로 변환하면서 인터페이스와 서비스 계층의 순수성을 유지할 수 있게 되었다.
+ - 향후 JDBC에서 다른 구현 기술로 변경하더라도 서비스 계층의 코드를 변경하지 않고 유지할 수 있다.
