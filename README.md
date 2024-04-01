@@ -1483,3 +1483,112 @@ SQLException과 같은 특정 구현 기술에 종속적인 체크 예외를 사
 #### 정리
  - 체크 예외를 런타임 예외로 변환하면서 인터페이스와 서비스 계층의 순수성을 유지할 수 있게 되었다.
  - 향후 JDBC에서 다른 구현 기술로 변경하더라도 서비스 계층의 코드를 변경하지 않고 유지할 수 있다.
+
+# 데이터 접근 예외 직접 만들기
+데이터베이스 오류에 따라 특정 예외에 대해 복구하고 싶을 수 있다.  
+예를들어 회원 가입시 DB에 이미 같은 ID가 있으면, ID 뒤에 숫자를 붙여 새로운 ID를 만들어야 한다고 가정한다.  
+`hello`라는 ID로 가입을 시도했고, 이미 같은 ID가 데이터베이스에 저장되어 있다면, 데이터베이스는 오류(Unique 제약조건) 코드를 반환하고,  
+해당 오류코드를 받은 JDBC 드리아버는 `SQLException`을 던진다.  
+`SQLException`에는 데이터베이스가 제공하는 `errorCode` 라는 것이 들어있다.  
+
+```java
+try {}
+catch(SQLException e) {
+    log.info(e.getErrorCode());
+}
+```
+
+서비스 계층에서는 예외복구를 위해 키 중복 오류를 확인할 수 있어야 한다.  
+그래야 새로운 ID를 만들어서 다시 저장을 시도할 수 있기 때문이다.  
+이러한 과정이 예외를 확인해서 복구하는 과정이다.  
+Repository는 `SQLException`을 서비스 계층에던지고 서비스 계층은 해당 예외의 오류 코드를 확인 후 키 중복 오류인 경우  
+새로운 ID를 다시 만들어 저장한다.
+그러나, `SQLException`에 들어있는 오류코드를 활용하기 위해 `SQLException`을 서비스 계층으로 던지게 되면,  
+서비스 계층이 `SQLException`이라는 JDBC 기술에 의존하게 되면서, 이전에 문제가 되었던 서비스계층의 순수성이 무너지게 된다.
+
+해당 문제를 해결하기 위해서는 앞서 사용했던 해결책인 Repository구현체에서 예외를 변환하여 던지면 된다.  
+
+```java
+public class MyDbExcption extends RuntimeException{
+    /* 예외를 위한 생성자 생략*/
+}
+```
+```java
+public class MyDuplicateKeyException extends MyDbExcption{
+    /* 예외를 위한 생성자 생략*/
+}
+```
+기존 사용했던 RuntimeException을 상속받은 SQLException을 Wrappin하는 MyDbException을 상속받아 의미 있는 계층을 형성한다.  
+이에따라 데이터베이스 관련 예외라는 계층을 만들수 있다.  
+또한 클래스 이름을 MyDuplicateKeyException로 함으로써, 데이터 중복의 경우에만 던질수 있게끔 명시하였다.  
+해당 예외는 직접 만든것이기 때문에 JDBC나 JPA같은 특정 기술에 종속적이지 않다.  
+따라서 해당 예외를 사용하더라도 서비스 계층의 순수성을 유지할 수 있다.  
+
+- ### Repository
+    ```java
+    @RequiredArgsConstructor
+    static class Repository {
+    
+        private final DataSource dataSource;
+    
+        public Member save(Member member) {
+            String sql = "insert into member(member_id, money) values(?, ?)";
+            Connection con = null;
+            PreparedStatement pstmt = null;
+            try {
+                con = dataSource.getConnection();
+                pstmt = con.prepareStatement(sql);
+                pstmt.setString(1, member.getMemberId());
+                pstmt.setInt(2, member.getMoney());
+                pstmt.executeUpdate();
+                return member;
+            } catch (SQLException e) {
+                // H2 DB
+                if (e.getErrorCode() == 23505) {
+                    throw new MyDuplicateKeyException(e);
+                }
+                throw new MyDbExcption(e);
+            } finally {
+                JdbcUtils.closeStatement(pstmt);
+                JdbcUtils.closeConnection(con);
+            }
+        }
+    
+    
+    }
+    ```
+    H2 Database기준 키중복 오류(23505)가 발생할 경우 MyDuplicateKeyException으로 변환하여 서비스계층에 throw하고,  
+    그 외의 오류는 MyDbException으로 변환하여 throw한다.  
+    (두 Exception은 RuntimeException이다.)
+- ### Service
+    ```java
+    
+    @RequiredArgsConstructor
+    static class Service {
+        private final Repository repository;
+    
+        void create(String memberId) {
+    
+            try {
+                Member savedMember = repository.save(new Member(memberId, 0));
+                log.info("saveId = {}", savedMember.getMemberId());
+            } catch (MyDuplicateKeyException e) { // 복구 가능한 예외 처리 - generateNewId()
+                log.info("키 중복, 복구 시도");
+                String retryId = generateNewId(memberId);
+                log.info("retryId = {}", retryId);
+                repository.save(new Member(retryId, 0));
+            } catch (MyDbExcption e) { // 복구 불가능한 예외 처리 - throw
+                log.info("데이터 접근 계층 예외", e);
+                throw e;
+            }
+        }
+    
+        private String generateNewId(String memberId) {
+            return memberId + new Random().nextInt(10000);
+    
+        }
+    }
+    ```
+    repository의 save()메소드 호출 도중 발생한 Exception의 종류가 키중복 오류인 MyDuplicateKeyException일 경우  
+    해당하는 catch블록에서 복구할수 있도록 처리한다.  
+    만약 복구할 수 없는 오류의 경우 별도의 catch블록을 추가하여 따로 공통으로 처리하는곳까지 던지도록 throw한다.  
