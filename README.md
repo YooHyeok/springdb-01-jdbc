@@ -1591,4 +1591,56 @@ public class MyDuplicateKeyException extends MyDbExcption{
     ```
     repository의 save()메소드 호출 도중 발생한 Exception의 종류가 키중복 오류인 MyDuplicateKeyException일 경우  
     해당하는 catch블록에서 복구할수 있도록 처리한다.  
-    만약 복구할 수 없는 오류의 경우 별도의 catch블록을 추가하여 따로 공통으로 처리하는곳까지 던지도록 throw한다.  
+    만약 복구할 수 없는 오류의 경우 별도의 catch블록을 추가하여 따로 공통으로 처리하는곳까지 던지도록 throw한다.
+
+# Spring 예외 추상화
+Spring에서는 위에서 설명한 데이터 접근 관련 예외를 추상화 하여 제공한다.  
+데이터 접근 계층에 대한 수십가지 예외를 정리해서 일관된 예외 계층을 제공한다.  
+각각의 예외는 특정 기술(JDBC/JPA)에 종속적이지 않게 설계되어 있으므로 서비스 계층에서도 스프링이 제공하는 예외를 사용하면 된다.  
+JDBC/JPA를 사용할 때 발생하는 예외를 스프링이 제공하는 예외로 변환해주는 역할도 스프링이 제공한다.  
+
+- ## DataAccessException  
+    RuntimeException을 상속받은 Exception으로 Spring이 제공하는 데이터 접근 계층의 최상위 예외이다.  
+  - ### `TransientDataAccessException`
+    Transient는 일시적이라는 뜻으로, 하위의 예외는 동일한 SQL을 다시 시도했을 때 성공할 가능성이 있다.  
+      - **QueryTimeoutException**
+      - **OptimisticLockingFailureException**
+      - **PessimisticLockingFailure**
+  - ### `NoTransientDataAccessException`
+    일시적이지 않다는 의미로 같은 SQL을 그대로 반복해서 실행하면 실패한다.
+    - **BadSqlGrammarException**
+    - **DataIntegrityViolationException**
+    - **DuplicateKeyException**
+
+## Spring SQL 예외 변환기
+`SQLErrorCodeSQLExceptionTranslator` 라는 클래스
+```java
+SQLExceptionTranslator exceptionTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+DataAccessException resultException = exceptionTranslator.translate("Description", sql, e);
+```
+위 코드에서 translate() 메서드의 첫번째 파라미터로 설명, 두번째 파라미터로 SQL, 세번째 파라미터로 발생한 Exception을 전달하면  
+적절한 스프링 데이터 접근 계층 예외로 변환후 반환한다.  
+(DataAccessException에 실제 BadSqlGrammarException 예외로 반환된다.)  
+
+```java
+    @Test
+    @DisplayName("Spring 예외 변환기 테스트")
+    void exceptionTraslator() {
+        String sql = "select bad grammer"; // 잘못된 SQL
+        try {
+            Connection con = dataSource.getConnection();
+            PreparedStatement pstmt = con.prepareStatement(sql);
+            pstmt.executeQuery();
+        } catch (SQLException e) {
+            SQLErrorCodeSQLExceptionTranslator exceptionTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+            DataAccessException resultException = exceptionTranslator.translate("작업명", sql, e); //BadGrammarException로 변환해준다.
+            log.info("resultException", resultException);
+            Assertions.assertThat(resultException.getClass()).isEqualTo(BadSqlGrammarException.class);
+        }
+    }
+```
+
+### DB 벤더 별 SQL Error - `sql-error-codes.xml`  
+Ctrl + N 을 검색한 뒤 files에서 sql-error-codes.xml을 검색해본다.  
+해당 파일에 각 DB 벤더에서 제공하는 Error Code들이 담겨있다.  
+Spring의 예외변환기는 발생한 SQL ErrorCode를 해당 파일에 대입하여 어떤 스프링 데이터 접근 예외로 전환해야 할지 찾는다.  
