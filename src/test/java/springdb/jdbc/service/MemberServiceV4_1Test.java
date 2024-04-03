@@ -12,8 +12,8 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import springdb.jdbc.domain.Member;
 import springdb.jdbc.repository.MemberRepository;
-import springdb.jdbc.repository.MemberRepositoryV3;
 import springdb.jdbc.repository.MemberRepositoryV4_1;
+import springdb.jdbc.repository.MemberRepositoryV4_2;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @Slf4j
 @SpringBootTest // Spring Bean에 대한 의존관계 주입이 된다.
-class MemberServiceV4Test {
+class MemberServiceV4_1Test {
     public static final String MEMBER_A = "memberA";
     public static final String MEMBER_B = "memberB";
     public static final String MEMBER_EX = "ex";
@@ -52,12 +52,12 @@ class MemberServiceV4Test {
             this.dataSource = dataSource;
         }
         @Bean
-        MemberRepository memberRepositoryV4_1() {
+        MemberRepository memberRepository() {
             return new MemberRepositoryV4_1(dataSource);
         }
         @Bean
         MemberServiceV4 memberServiceV4() {
-            return new MemberServiceV4(memberRepositoryV4_1());
+            return new MemberServiceV4(memberRepository());
         }
     }
 
