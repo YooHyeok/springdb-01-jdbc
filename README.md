@@ -1613,7 +1613,7 @@ JDBC/JPA를 사용할 때 발생하는 예외를 스프링이 제공하는 예�
     - **DuplicateKeyException**
 
 ## Spring SQL 예외 변환기
-`SQLErrorCodeSQLExceptionTranslator` 라는 클래스
+`SQLErrorCodeSQLExceptionTranslator`
 ```java
 SQLExceptionTranslator exceptionTranslator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
 DataAccessException resultException = exceptionTranslator.translate("Description", sql, e);
@@ -1644,3 +1644,71 @@ DataAccessException resultException = exceptionTranslator.translate("Description
 Ctrl + N 을 검색한 뒤 files에서 sql-error-codes.xml을 검색해본다.  
 해당 파일에 각 DB 벤더에서 제공하는 Error Code들이 담겨있다.  
 Spring의 예외변환기는 발생한 SQL ErrorCode를 해당 파일에 대입하여 어떤 스프링 데이터 접근 예외로 전환해야 할지 찾는다.  
+
+# JDBC 반복문제해결 - JdbcTemplate
+`JdbcTemplate`는 JDBC로 개발할때 발생하는 반복 로직을 대부분 해결해준다.  
+뿐만 아니라 `트랜잭션을 위한 커넥션 동기화`, `스프링 예외 변환기` 도 자동으로 실행해 준다.  
+- ### JDBC 반복 문제
+    - 커넥션 조회, 커넥션 동기화
+    - `PreparedStatement` 생성 및 파라미터 바인딩
+    - 쿼리 실행
+    - 결과 바인딩
+    - 예외 발생시 스프링 예외 변환기 실행
+    - 리소스 종료
+
+
+```java
+@Slf4j
+public class MemberRepository implements MemberRepository {
+    private final JdbcTemplate jdbcTemplate;
+    public MemberRepository(DataSource dataSource) {
+        this.jdbcTemplate = new JdbcTemplate(dataSource);
+    }
+
+    @Override
+    public Member save(Member member) {
+        String sql = "insert into member(member_id, money) values(?, ?)";
+        int count = jdbcTemplate.update(sql, member.getMemberId(), member.getMoney());
+        return member;
+    }
+
+    @Override
+    public Member findById(String memberId) {
+        String sql = "select * from member where member_id = ?";
+        return jdbcTemplate.queryForObject(sql, mamberRowMapper(), memberId); // 단건조회
+
+    }
+
+    private RowMapper<Member> mamberRowMapper() {
+        /*return (rs, rowNum) -> { // mapRow에 대한 람다식 구현
+            Member member = new Member();
+            member.setMemberId(rs.getString("member_id"));
+            member.setMoney(rs.getInt("money"));
+            return member;
+        };*/
+
+        return new RowMapper<Member>() {
+            @Override
+            public Member mapRow(ResultSet rs, int rowNum) throws SQLException {
+                Member member = new Member();
+                member.setMemberId(rs.getString("member_id"));
+                member.setMoney(rs.getInt("money"));
+                return member;
+            }
+        };
+    }
+
+    @Override
+    public void update(String memberId, int money) {
+        String sql = "update member set money=? where member_id=?";
+        int update = jdbcTemplate.update(sql, money, memberId);
+    }
+
+    @Override
+    public void delete(String memberId) {
+        String sql = "delete member where member_id = ? ";
+        int update = jdbcTemplate.update(sql, memberId);
+    }
+}
+
+```
